@@ -1,0 +1,67 @@
+# Environment & Secrets
+.env
+.env.local
+*.key
+*.pem
+
+# ─── Runtime data (NEVER commit these — restored from HF on boot) ───
+data/albums/*
+data/videos/*
+data/backup data/*
+data/knowledge/
+data/jobs.json
+data/jobs.json.tmp
+data/meta_knowledge_graph.json
+data/recipes.json
+data/image_knowledge_base.json
+data/host_rules.json
+data/album_folders.json
+data/domain_cookies.json
+data/temp_zips/
+data/trash/
+*.part
+*.ytdl
+!data/albums/.gitkeep
+!data/videos/.gitkeep
+
+# Root-level debug/test scripts (not part of the app)
+find_box.py
+print_buttons.py
+test_*.py
+probe_*.json
+gallery_render_html.txt
+mock-preview/
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+.venv/
+env/
+
+# Node & Frontend build
+frontend-mobile-preview/node_modules/
+frontend-mobile-preview/.vite/
+frontend/node_modules/
+node_modules/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# PyInstaller build artifacts
+dist/
+build/
+*.spec
+
+# Vite production build outputs
+frontend-mobile-preview/dist/
+frontend/dist/

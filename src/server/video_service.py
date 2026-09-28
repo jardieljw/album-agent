@@ -1,0 +1,1291 @@
+"""
+Serviço de gerenciamento do armazenamento de vídeos no disco (data/videos/).
+Manipulação física de arquivos, pastas, metadados e favoritos.
+"""
+
+import os
+import sys
+import json
+import shutil
+import hashlib
+import time
+import logging
+from typing import Dict, Any, List, Optional
+import httpx
+from pathlib import Path
+
+try:
+    import cv2
+    import numpy as np
+    HAS_OPENCV = True
+except ImportError:
+    HAS_OPENCV = False
+
+# Determina a pasta raiz do projeto ou executável com tolerância a ausência de pastas
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+    if os.path.basename(BASE_DIR).lower() == "dist":
+        BASE_DIR = os.path.dirname(BASE_DIR)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+DATA_DIR = os.path.join(BASE_DIR, "data")
+VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
+METADATA_FILE = os.path.join(VIDEOS_DIR, "videos_metadata.json")
+
+# Criação automática garantida caso o executável seja movido sozinho
+os.makedirs(VIDEOS_DIR, exist_ok=True)
+os.makedirs(os.path.join(VIDEOS_DIR, "Geral"), exist_ok=True)
+
+SUPPORTED_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"}
+
+logger = logging.getLogger("VideoService")
+
+
+def probe_video_file(file_path: str) -> Dict[str, Any]:
+    """Probes a local video file using cv2 to extract exact resolution, fps and duration."""
+    info = {"width": 0, "height": 0, "fps": 0, "duration_seconds": 0.0}
+    if not file_path or not os.path.exists(file_path) or not HAS_OPENCV:
+        return info
+    try:
+        cap = cv2.VideoCapture(file_path)
+        if cap.isOpened():
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = round(cap.get(cv2.CAP_PROP_FPS))
+            total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            dur = (total_frames / max(fps, 1)) if fps > 0 else 0.0
+            cap.release()
+            info["width"] = w
+            info["height"] = h
+            info["fps"] = fps
+            info["duration_seconds"] = round(dur, 2)
+    except Exception as e:
+        logger.warning(f"Error probing video {file_path} with cv2: {e}")
+    return info
+
+# =====================================================================
+# CLOUD STORAGE MANAGER (Hugging Face Datasets - 10GB+ Free / Sem Cartão)
+# =====================================================================
+class CloudStorageManager:
+    """
+    Gerenciador singleton de armazenamento de objetos usando Hugging Face Hub (Dataset LFS).
+    Permite armazenamento gratuito de dezenas de GBs com autenticação por token Write.
+    """
+    def __init__(self):
+        self.token = os.getenv("HF_TOKEN", "").strip()
+        self.repo_id = os.getenv("HF_DATASET_REPO", "").strip()
+        self.max_cloud_bytes = 10 * 1024 * 1024 * 1024  # 10 GB de referência
+        self._api = None
+        self._rate_limited_until = 0.0
+
+    def _get_api(self):
+        if not self.token or not self.repo_id:
+            # 1. Tentar ler diretamente do arquivo .env da raiz do projeto
+            try:
+                env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
+                if os.path.exists(env_path):
+                    with open(env_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#") and "=" in line:
+                                k, v = line.split("=", 1)
+                                k, v = k.strip(), v.strip().strip('"').strip("'")
+                                if k == "HF_TOKEN" and not self.token:
+                                    self.token = v
+                                elif k == "HF_DATASET_REPO" and not self.repo_id:
+                                    self.repo_id = v
+            except Exception as e:
+                print(f"[CloudStorage] Erro ao ler .env: {e}")
+
+            if not self.token:
+                self.token = os.getenv("HF_TOKEN", "").strip()
+            if not self.repo_id:
+                self.repo_id = os.getenv("HF_DATASET_REPO", "").strip()
+
+        if not self.token or not self.repo_id:
+            return None
+
+        if self._api is None:
+            try:
+                from huggingface_hub import HfApi
+                self._api = HfApi(token=self.token)
+            except Exception as e:
+                print(f"[CloudStorage] Erro ao inicializar HfApi: {e}")
+                return None
+        return self._api
+
+    def is_connected(self) -> bool:
+        api = self._get_api()
+        if not api:
+            return False
+        try:
+            api.whoami()
+            return True
+        except Exception:
+            return False
+
+    def upload_file(self, local_path_or_bytes, path_in_repo: str) -> Optional[str]:
+        if time.time() < self._rate_limited_until:
+            return None
+
+        api = self._get_api()
+        if not api:
+            return None
+
+        norm_path = path_in_repo.replace("\\", "/").lstrip("/")
+        try:
+            if isinstance(local_path_or_bytes, (str, Path)):
+                api.upload_file(
+                    path_or_fileobj=str(local_path_or_bytes),
+                    path_in_repo=norm_path,
+                    repo_id=self.repo_id,
+                    repo_type="dataset",
+                    commit_message=f"Upload {os.path.basename(norm_path)}"
+                )
+            elif isinstance(local_path_or_bytes, (bytes, bytearray)):
+                import io
+                api.upload_file(
+                    path_or_fileobj=io.BytesIO(local_path_or_bytes),
+                    path_in_repo=norm_path,
+                    repo_id=self.repo_id,
+                    repo_type="dataset",
+                    commit_message=f"Upload {os.path.basename(norm_path)}"
+                )
+            else:
+                api.upload_file(
+                    path_or_fileobj=local_path_or_bytes,
+                    path_in_repo=norm_path,
+                    repo_id=self.repo_id,
+                    repo_type="dataset",
+                    commit_message=f"Upload {os.path.basename(norm_path)}"
+                )
+
+            resolve_url = f"https://huggingface.co/datasets/{self.repo_id}/resolve/main/{norm_path}"
+            return resolve_url
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "rate limit" in err_str.lower() or "commit quota" in err_str.lower():
+                self._rate_limited_until = time.time() + 1500.0  # 25 min backoff
+                print(f"[CloudStorage] Cota de commits da Hugging Face atingida (429). Pausando uploads remotos por 25 minutos.")
+            else:
+                print(f"[CloudStorage] Falha no upload para Hugging Face ({norm_path}): {e}")
+            return None
+
+
+    def delete_file(self, path_in_repo: str) -> bool:
+        api = self._get_api()
+        if not api:
+            return False
+
+        norm_path = path_in_repo.replace("\\", "/").lstrip("/")
+        try:
+            api.delete_file(
+                path_in_repo=norm_path,
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                commit_message=f"Delete {os.path.basename(norm_path)}"
+            )
+            return True
+        except Exception as e:
+            err_str = str(e)
+            if "Entry Not Found" in err_str or "404" in err_str:
+                return True
+            print(f"[CloudStorage] Erro ao excluir {norm_path}: {e}")
+            return False
+
+    def upload_json(self, data: Any, path_in_repo: str) -> bool:
+        """Uploads a Python dict/list as a JSON file to HF."""
+        try:
+            import io
+            raw = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+            result = self.upload_file(io.BytesIO(raw), path_in_repo)
+            return result is not None
+        except Exception as e:
+            print(f"[CloudStorage] Erro ao enviar JSON {path_in_repo}: {e}")
+            return False
+
+    def download_json(self, path_in_repo: str) -> Optional[Any]:
+        """Downloads a JSON file from HF and returns parsed content."""
+        api = self._get_api()
+        if not api:
+            return None
+        norm_path = path_in_repo.replace("\\", "/").lstrip("/")
+        try:
+            from huggingface_hub import hf_hub_download
+            local = hf_hub_download(
+                repo_id=self.repo_id,
+                filename=norm_path,
+                repo_type="dataset",
+                token=self.token,
+                force_download=True,
+            )
+            with open(local, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[CloudStorage] Erro ao baixar JSON {norm_path}: {e}")
+            return None
+
+    def list_files_in_folder(self, folder_prefix: str) -> List[str]:
+        """Lists all file paths inside a given folder prefix in the HF repo."""
+        api = self._get_api()
+        if not api:
+            return []
+        folder_prefix = folder_prefix.replace("\\", "/").rstrip("/")
+        try:
+            tree = list(api.list_repo_tree(
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                path_in_repo=folder_prefix,
+                recursive=True
+            ))
+            return [getattr(item, "path", "") for item in tree
+                    if not getattr(item, "path", "").endswith("/")]
+        except Exception as e:
+            print(f"[CloudStorage] Erro ao listar {folder_prefix}: {e}")
+            return []
+
+    def get_path_sizes_map(self) -> Dict[str, int]:
+        """Returns a cached mapping of repo path and filename -> size in bytes from HF repo tree."""
+        now = time.time()
+        if hasattr(self, "_path_sizes_cache") and (now - getattr(self, "_cache_time", 0) < 60):
+            return self._path_sizes_cache
+
+        api = self._get_api()
+        if not api:
+            return getattr(self, "_path_sizes_cache", {})
+
+        try:
+            tree = list(api.list_repo_tree(repo_id=self.repo_id, repo_type="dataset", recursive=True))
+            mapping = {}
+            for item in tree:
+                rpath = getattr(item, "path", "").replace("\\", "/").strip("/")
+                sz = getattr(item, "size", 0) or 0
+                if rpath and sz > 0:
+                    mapping[rpath] = sz
+                    mapping[os.path.basename(rpath)] = sz
+            self._path_sizes_cache = mapping
+            self._cache_time = now
+            return mapping
+        except Exception:
+            return getattr(self, "_path_sizes_cache", {})
+
+    def get_storage_stats(self) -> Dict[str, Any]:
+        api = self._get_api()
+        default_stats = {
+            "is_connected": False,
+            "provider": "Hugging Face Hub (Dataset LFS)",
+            "repo_id": self.repo_id or "Não configurado",
+            "total_bytes_used": 0,
+            "max_bytes_limit": self.max_cloud_bytes,
+            "used_percentage": 0.0,
+            "files_count": 0,
+            "files": []
+        }
+
+        if not api:
+            return default_stats
+
+        try:
+            tree = list(api.list_repo_tree(repo_id=self.repo_id, repo_type="dataset", recursive=True))
+            total_bytes = 0
+            file_items = []
+
+            for item in tree:
+                size = getattr(item, "size", 0) or 0
+                rpath = getattr(item, "path", "")
+                if rpath and not rpath.endswith("/"):
+                    total_bytes += size
+                    file_items.append({
+                        "path": rpath,
+                        "size_bytes": size
+                    })
+
+            pct = (total_bytes / self.max_cloud_bytes * 100) if self.max_cloud_bytes > 0 else 0.0
+            return {
+                "is_connected": True,
+                "provider": "Hugging Face Hub (Dataset LFS)",
+                "repo_id": self.repo_id,
+                "total_bytes_used": total_bytes,
+                "max_bytes_limit": self.max_cloud_bytes,
+                "used_percentage": round(min(pct, 100.0), 2),
+                "files_count": len(file_items),
+                "files": file_items
+            }
+        except Exception as e:
+            default_stats["error"] = str(e)
+            return default_stats
+
+cloud_storage = CloudStorageManager()
+
+
+class VideoService:
+    def __init__(self, base_dir: str = VIDEOS_DIR):
+        self.base_dir = base_dir
+        self.metadata_file = os.path.join(self.base_dir, "videos_metadata.json")
+        self.thumbnails_dir = os.path.join(self.base_dir, ".thumbnails")
+        self._ensure_storage_initialized()
+
+    def _ensure_storage_initialized(self):
+        """Creates data/videos and default folders. On cloud restarts, restores metadata from HF."""
+        os.makedirs(self.base_dir, exist_ok=True)
+        os.makedirs(self.thumbnails_dir, exist_ok=True)
+        default_folder = os.path.join(self.base_dir, "Geral")
+        os.makedirs(default_folder, exist_ok=True)
+
+        # --- STEP 1: Restore metadata from HF if local disk was wiped ---
+        if cloud_storage.is_connected():
+            if not os.path.exists(self.metadata_file) or os.path.getsize(self.metadata_file) < 5:
+                print("[VideoService] Local metadata ausente — tentando restaurar do Hugging Face...")
+                remote_meta = cloud_storage.download_json("metadata/videos_metadata.json")
+                if remote_meta and isinstance(remote_meta, dict):
+                    try:
+                        with open(self.metadata_file, "w", encoding="utf-8") as fp:
+                            json.dump(remote_meta, fp, indent=2, ensure_ascii=False)
+                        print(f"[VideoService] Metadata restaurado do HF: {len(remote_meta)} vídeos.")
+                    except Exception as e:
+                        print(f"[VideoService] Erro ao escrever metadata restaurado: {e}")
+
+        if not os.path.exists(self.metadata_file):
+            self._save_metadata({})
+
+        # Recriar fisicamente as pastas de todos os vídeos conhecidos no metadata
+        try:
+            meta = self._load_metadata()
+            for v in meta.values():
+                folder = v.get("folder")
+                if folder and not folder.startswith("."):
+                    os.makedirs(os.path.join(self.base_dir, folder), exist_ok=True)
+        except Exception:
+            pass
+
+        # If completely empty (no metadata entries AND no remote entries), show sample
+        self._ensure_sample_video()
+
+        # Auto-sincronizar qualquer vídeo local existente que ainda não esteja no Hugging Face
+        self.sync_local_videos_to_cloud()
+
+    def sync_local_videos_to_cloud(self):
+        """Auto-discovers any local videos marked as 'render_local' and uploads them to Hugging Face sequentially."""
+        import threading
+        def _auto_sync():
+            time.sleep(10)  # Aguarda startup completo
+            try:
+                if not cloud_storage.is_connected() or time.time() < cloud_storage._rate_limited_until:
+                    return
+                meta = self._load_metadata()
+                for vid_id, data in list(meta.items()):
+                    if time.time() < cloud_storage._rate_limited_until:
+                        break
+                    cloud_url = data.get("cloud_url")
+                    storage_loc = data.get("storage_location", "render_local")
+                    if not cloud_url or storage_loc != "huggingface":
+                        rel_path = data.get("rel_path")
+                        if rel_path:
+                            local_fpath = os.path.join(self.base_dir, rel_path.replace("/", os.sep))
+                            if os.path.exists(local_fpath):
+                                folder = data.get("folder", "Geral")
+                                filename = os.path.basename(local_fpath)
+                                repo_path = f"videos/{folder}/{filename}"
+                                logger.info(f"[AutoSync] Enviando vídeo local pendente para o Hugging Face: {filename}")
+                                c_url = cloud_storage.upload_file(local_fpath, repo_path)
+                                if c_url:
+                                    meta_cur = self._load_metadata()
+                                    if vid_id in meta_cur:
+                                        meta_cur[vid_id]["storage_location"] = "huggingface"
+                                        meta_cur[vid_id]["cloud_url"] = c_url
+                                        self._save_metadata(meta_cur)
+                                time.sleep(15)  # Espaçamento seguro entre commits para não estourar taxa
+            except Exception as e:
+                logger.warning(f"[AutoSync] Erro na sincronização automática para o HF: {e}")
+
+        threading.Thread(target=_auto_sync, daemon=True).start()
+
+
+    def _ensure_sample_video(self):
+        """Downloads a small royalty-free demo video only if no videos exist at all (local + remote)."""
+        all_videos = self.list_all_videos()
+        if not all_videos:
+            sample_target = os.path.join(self.base_dir, "Geral", "Amostra_Ocean_Waves.mp4")
+            if not os.path.exists(sample_target):
+                try:
+                    # Public sample from Google Cloud Storage demo bucket (~1.5 MB)
+                    sample_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+                    with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+                        resp = client.get(sample_url)
+                        if resp.status_code == 200 and len(resp.content) > 10000:
+                            with open(sample_target, "wb") as fp:
+                                fp.write(resp.content)
+                            self._update_single_metadata(
+                                file_path=sample_target,
+                                title="Amostra Ocean Waves (Demo 4K)",
+                                folder="Geral",
+                                is_favorite=True
+                            )
+                except Exception:
+                    pass
+
+    def _load_metadata(self) -> Dict[str, Any]:
+        """Loads videos metadata JSON."""
+        if not os.path.exists(self.metadata_file):
+            return {}
+        try:
+            with open(self.metadata_file, "r", encoding="utf-8") as fp:
+                return json.load(fp)
+        except Exception:
+            return {}
+
+    def _save_metadata(self, data: Dict[str, Any]):
+        """Persists videos metadata to local disk AND mirrors to HF for persistence across restarts."""
+        try:
+            with open(self.metadata_file, "w", encoding="utf-8") as fp:
+                json.dump(data, fp, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving videos metadata locally: {e}")
+        # Async-style: mirror to HF in background thread to avoid blocking uploads
+        try:
+            import threading
+            def _sync():
+                cloud_storage.upload_json(data, "metadata/videos_metadata.json")
+            t = threading.Thread(target=_sync, daemon=True)
+            t.start()
+        except Exception as e:
+            print(f"[VideoService] Erro ao iniciar sync de metadata para HF: {e}")
+
+    def _get_video_id(self, rel_path: str) -> str:
+        """Generates a stable deterministic ID from relative path."""
+        norm = rel_path.replace("\\", "/").strip("/")
+        return hashlib.md5(norm.encode("utf-8")).hexdigest()[:12]
+
+    def _find_video_id(self, rel_path: str, meta: Dict[str, Any]) -> str:
+        """Finds existing ID for a rel_path, or generates a stable ID."""
+        norm = rel_path.replace("\\", "/").strip("/")
+        for vid_id, data in meta.items():
+            if data.get("rel_path", "").replace("\\", "/").strip("/") == norm:
+                return vid_id
+        return self._get_video_id(norm)
+
+    def _update_single_metadata(
+        self,
+        file_path: Optional[str] = None,
+        title: Optional[str] = None,
+        folder: Optional[str] = None,
+        is_favorite: Optional[bool] = None,
+        vid_id: Optional[str] = None,
+        storage_location: Optional[str] = None,
+        cloud_url: Optional[str] = None,
+        stream_url: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        fps: Optional[int] = None,
+        duration_seconds: Optional[float] = None,
+        source_url: Optional[str] = None,
+        source_id: Optional[str] = None
+    ):
+        meta = self._load_metadata()
+        if file_path:
+            rel_path = os.path.relpath(file_path, self.base_dir).replace("\\", "/")
+            if not vid_id:
+                vid_id = self._find_video_id(rel_path, meta)
+        else:
+            rel_path = f"{folder or 'Geral'}/remote_{vid_id or int(time.time())}.mp4"
+            if not vid_id:
+                vid_id = self._get_video_id(rel_path)
+
+        entry = meta.get(vid_id, {})
+
+        if title is not None:
+            entry["title"] = title
+        if folder is not None:
+            entry["folder"] = folder
+        if is_favorite is not None:
+            entry["is_favorite"] = is_favorite
+        if storage_location is not None:
+            entry["storage_location"] = storage_location
+        elif "storage_location" not in entry or entry.get("storage_location") == "render_local":
+            entry["storage_location"] = "local"
+        if cloud_url is not None:
+            entry["cloud_url"] = cloud_url
+        if stream_url is not None:
+            entry["custom_stream_url"] = stream_url
+        if file_size_bytes is not None:
+            entry["file_size_bytes"] = file_size_bytes
+        if width is not None:
+            entry["width"] = width
+        if height is not None:
+            entry["height"] = height
+        if fps is not None:
+            entry["fps"] = fps
+        if duration_seconds is not None:
+            entry["duration_seconds"] = duration_seconds
+        if source_url is not None:
+            entry["source_url"] = source_url
+        if source_id is not None:
+            entry["source_id"] = source_id
+
+
+        # Auto-probe if missing dimensions and local file exists
+        if file_path and os.path.exists(file_path) and (not entry.get("width") or not entry.get("height")):
+            p = probe_video_file(file_path)
+            if p["width"] > 0:
+                entry["width"] = p["width"]
+                entry["height"] = p["height"]
+                entry["fps"] = p["fps"]
+                entry["duration_seconds"] = p["duration_seconds"]
+
+        entry["id"] = vid_id
+        entry["rel_path"] = rel_path
+
+        meta[vid_id] = entry
+        self._save_metadata(meta)
+        return vid_id
+
+    def list_folders(self) -> List[Dict[str, Any]]:
+        """Lists all physical and metadata folders, properly counting both local and HF cloud videos, deduplicating phantom variants."""
+        import unicodedata
+        default_geral = os.path.join(self.base_dir, "Geral")
+        os.makedirs(default_geral, exist_ok=True)
+
+        meta = self._load_metadata()
+        all_videos = self.list_all_videos()
+
+        def _clean_folder_name(name: str) -> str:
+            if not name:
+                return "Geral"
+            n = unicodedata.normalize("NFC", name.strip())
+            return n.rstrip(" -") or "Geral"
+
+        def _folder_key(name: str) -> str:
+            if not name:
+                return "geral"
+            n = unicodedata.normalize("NFKD", name)
+            n = "".join(c for c in n if not unicodedata.combining(c))
+            return n.strip(" -").lower() or "geral"
+
+        # Coletar candidatos de pastas do disco e metadata
+        candidate_folders: Dict[str, List[str]] = {}
+        for entry in ["Geral"]:
+            candidate_folders.setdefault(_folder_key(entry), []).append(entry)
+
+        if os.path.exists(self.base_dir):
+            for entry in os.listdir(self.base_dir):
+                full_path = os.path.join(self.base_dir, entry)
+                if os.path.isdir(full_path) and not entry.startswith("."):
+                    clean = _clean_folder_name(entry)
+                    candidate_folders.setdefault(_folder_key(clean), []).append(clean)
+
+        for v in meta.values():
+            f = v.get("folder")
+            if f and not f.startswith("."):
+                clean = _clean_folder_name(f)
+                candidate_folders.setdefault(_folder_key(clean), []).append(clean)
+
+        folders = []
+        for key, variants in candidate_folders.items():
+            # Agrupar todos os vídeos pertencentes a esta chave normalizada
+            vids_in_folder = [v for v in all_videos if _folder_key(v.get("folder", "")) == key]
+            total_bytes = sum(v.get("file_size_bytes", 0) for v in vids_in_folder)
+
+            # Escolher o melhor nome canônico: preferir a variante usada pelos vídeos
+            canonical_name = None
+            if vids_in_folder:
+                # Contar qual variante é mais frequente entre os vídeos
+                variant_counts: Dict[str, int] = {}
+                for v in vids_in_folder:
+                    vf = _clean_folder_name(v.get("folder", ""))
+                    variant_counts[vf] = variant_counts.get(vf, 0) + 1
+                canonical_name = max(variant_counts.items(), key=lambda x: x[1])[0]
+            else:
+                # Se não há vídeos, usar a variante original mais limpa
+                canonical_name = variants[0]
+
+            # Garantir pasta física no disco com o nome canônico
+            if canonical_name:
+                os.makedirs(os.path.join(self.base_dir, canonical_name), exist_ok=True)
+
+            folders.append({
+                "id": canonical_name,
+                "name": canonical_name,
+                "video_count": len(vids_in_folder),
+                "total_size_bytes": total_bytes
+            })
+
+        # Ordenar: Geral primeiro se tiver vídeos ou por ordem alfabética
+        folders.sort(key=lambda x: (x["name"] != "Geral", x["name"]))
+        return folders
+
+    def list_all_videos(self) -> List[Dict[str, Any]]:
+        """Scans all folders for video files and merges with saved metadata."""
+        meta = self._load_metadata()
+        videos = []
+
+        for root, dirs, files in os.walk(self.base_dir):
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in SUPPORTED_EXTENSIONS:
+                    full_path = os.path.join(root, f)
+                    rel_path = os.path.relpath(full_path, self.base_dir).replace("\\", "/")
+                    parts = rel_path.split("/")
+                    folder_name = parts[0] if len(parts) > 1 else "Geral"
+
+                    vid_id = self._find_video_id(rel_path, meta)
+                    entry_meta = meta.get(vid_id, {})
+
+                    try:
+                        stat = os.stat(full_path)
+                        size_bytes = stat.st_size
+                        mtime = stat.st_mtime
+                        created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime))
+                    except Exception:
+                        size_bytes = 0
+                        created_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+                    clean_title = entry_meta.get("title") or os.path.splitext(f)[0].replace("_", " ")
+                    storage_loc = entry_meta.get("storage_location", "local")
+                    if storage_loc == "render_local":
+                        storage_loc = "local"
+
+                    w = entry_meta.get("width") or 0
+                    h = entry_meta.get("height") or 0
+                    fps = entry_meta.get("fps") or 0
+                    dur = entry_meta.get("duration_seconds") or 0.0
+                    if (w == 0 or h == 0) and os.path.exists(full_path):
+                        p_info = probe_video_file(full_path)
+                        if p_info["width"] > 0:
+                            w = p_info["width"]
+                            h = p_info["height"]
+                            fps = p_info["fps"]
+                            dur = p_info["duration_seconds"]
+                            entry_meta["width"] = w
+                            entry_meta["height"] = h
+                            entry_meta["fps"] = fps
+                            entry_meta["duration_seconds"] = dur
+                            meta[vid_id] = entry_meta
+
+                    videos.append({
+                        "id": vid_id,
+                        "title": clean_title,
+                        "filename": f,
+                        "folder": folder_name,
+                        "file_size_bytes": size_bytes,
+                        "format": ext[1:].upper(),
+                        "is_favorite": entry_meta.get("is_favorite", False),
+                        "created_at": created_at,
+                        "rel_path": rel_path,
+                        "storage_location": storage_loc,
+                        "source_origin": entry_meta.get("source_origin") or ("web" if entry_meta.get("custom_stream_url") else "pc"),
+                        "cloud_url": entry_meta.get("cloud_url"),
+                        "stream_url": entry_meta.get("custom_stream_url") or f"/api/videos/{vid_id}/stream",
+                        "download_url": f"/api/videos/{vid_id}/download",
+                        "thumbnail_url": f"/api/videos/{vid_id}/thumbnail",
+                        "width": w,
+                        "height": h,
+                        "fps": fps,
+                        "duration_seconds": dur,
+                        "source_url": entry_meta.get("source_url"),
+                        "source_id": entry_meta.get("source_id")
+                    })
+
+
+        # Adicionar vídeos puramente remotos (ex: stream externo cadastrado)
+        # Também inclui vídeos cujo arquivo local sumiu mas que ainda têm cloud_url no HF
+        seen_ids = {v["id"] for v in videos}
+        for vid_id, entry_meta in meta.items():
+            if vid_id not in seen_ids:
+                has_remote = entry_meta.get("custom_stream_url") or entry_meta.get("cloud_url")
+                if not has_remote:
+                    continue
+                storage_loc = entry_meta.get("storage_location", "huggingface")
+                clean_title = entry_meta.get("title") or f"Vídeo Remoto {vid_id[:6]}"
+                cloud_url = entry_meta.get("cloud_url")
+                custom_stream = entry_meta.get("custom_stream_url")
+                # IMPORTANT: stream_url ALWAYS goes through server proxy (browser has no HF token)
+                # cloud_url is kept for "open in new tab" button (direct HF link)
+                effective_stream = custom_stream or f"/api/videos/{vid_id}/stream"
+                # Resgata o tamanho real em bytes se estiver zerado
+                size_bytes = entry_meta.get("file_size_bytes", 0)
+                if size_bytes == 0:
+                    rel_p = entry_meta.get("rel_path", "")
+                    if rel_p:
+                        loc_p = os.path.join(self.base_dir, rel_p.replace("/", os.sep))
+                        if os.path.exists(loc_p):
+                            size_bytes = os.path.getsize(loc_p)
+                    if size_bytes == 0 and cloud_url:
+                        hf_sizes = cloud_storage.get_path_sizes_map()
+                        folder_name = entry_meta.get("folder", "Geral")
+                        fname = os.path.basename(rel_p) if rel_p else f"{clean_title}.mp4"
+                        size_bytes = hf_sizes.get(f"videos/{folder_name}/{fname}") or hf_sizes.get(fname) or 0
+
+                videos.append({
+                    "id": vid_id,
+                    "title": clean_title,
+                    "filename": f"{clean_title}.mp4",
+                    "folder": entry_meta.get("folder", "Geral"),
+                    "file_size_bytes": size_bytes,
+                    "format": "MP4",
+                    "is_favorite": entry_meta.get("is_favorite", False),
+                    "created_at": entry_meta.get("created_at", time.strftime("%Y-%m-%d %H:%M:%S")),
+                    "rel_path": entry_meta.get("rel_path", ""),
+                    "storage_location": storage_loc,
+                    "source_origin": entry_meta.get("source_origin") or ("web" if custom_stream or cloud_url else "pc"),
+                    "cloud_url": cloud_url,
+                    "stream_url": effective_stream,
+                    "download_url": f"/api/videos/{vid_id}/download",
+                    "thumbnail_url": f"/api/videos/{vid_id}/thumbnail",
+                    "width": entry_meta.get("width") or 0,
+                    "height": entry_meta.get("height") or 0,
+                    "fps": entry_meta.get("fps") or 0,
+                    "duration_seconds": entry_meta.get("duration_seconds") or 0,
+                    "source_url": entry_meta.get("source_url"),
+                    "source_id": entry_meta.get("source_id")
+                })
+
+
+        # Sort newest first
+        videos.sort(key=lambda v: v.get("created_at", ""), reverse=True)
+        return videos
+
+    def get_video_by_id(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """Finds a video item and its full filesystem path by ID with high-speed direct metadata lookup."""
+        meta = self._load_metadata()
+        entry = meta.get(video_id)
+        if entry:
+            rel_path = entry.get("rel_path", "")
+            full_path = os.path.join(self.base_dir, rel_path.replace("/", os.sep))
+            # Verify if local file exists, or if folder was renamed
+            if not os.path.exists(full_path):
+                fname = entry.get("filename") or os.path.basename(rel_path)
+                for root, dirs, files in os.walk(self.base_dir):
+                    if fname in files:
+                        full_path = os.path.join(root, fname)
+                        break
+
+            exists = os.path.exists(full_path) if full_path else False
+            return {
+                "id": video_id,
+                "title": entry.get("title") or entry.get("filename", "").replace("_", " "),
+                "filename": entry.get("filename") or os.path.basename(rel_path),
+                "folder": entry.get("folder") or "Geral",
+                "file_size_bytes": entry.get("file_size_bytes") or (os.path.getsize(full_path) if exists else 0),
+                "format": entry.get("format") or (os.path.splitext(rel_path)[1][1:].upper() if rel_path else "MP4"),
+                "is_favorite": entry.get("is_favorite", False),
+                "created_at": entry.get("created_at") or time.strftime("%Y-%m-%d %H:%M:%S"),
+                "rel_path": rel_path,
+                "storage_location": entry.get("storage_location", "local"),
+                "source_origin": entry.get("source_origin") or "pc",
+                "cloud_url": entry.get("cloud_url"),
+                "stream_url": entry.get("custom_stream_url") or f"/api/videos/{video_id}/stream",
+                "download_url": f"/api/videos/{video_id}/download",
+                "thumbnail_url": f"/api/videos/{video_id}/thumbnail",
+                "width": entry.get("width") or 0,
+                "height": entry.get("height") or 0,
+                "fps": entry.get("fps") or 0,
+                "duration_seconds": entry.get("duration_seconds") or 0.0,
+                "source_url": entry.get("source_url"),
+                "source_id": entry.get("source_id"),
+                "full_path": full_path if exists else None
+            }
+
+        # Fallback to list_all_videos only if not in metadata
+        for v in self.list_all_videos():
+            if v["id"] == video_id:
+                full_path = os.path.join(self.base_dir, v["rel_path"].replace("/", os.sep))
+                v["full_path"] = full_path if os.path.exists(full_path) else None
+                return v
+        return None
+
+    def create_folder(self, folder_name: str) -> bool:
+        """Creates a new folder on disk."""
+        clean_name = "".join(c for c in folder_name if c.isalnum() or c in (" ", "-", "_")).strip()
+        if not clean_name:
+            return False
+        target_path = os.path.join(self.base_dir, clean_name)
+        os.makedirs(target_path, exist_ok=True)
+        return True
+
+    def rename_folder(self, old_name: str, new_name: str) -> bool:
+        """Renames a physical folder and updates metadata paths while preserving video IDs."""
+        old_path = os.path.join(self.base_dir, old_name)
+        clean_new = "".join(c for c in new_name if c.isalnum() or c in (" ", "-", "_")).strip()
+        new_path = os.path.join(self.base_dir, clean_new)
+
+        if not os.path.exists(old_path) or os.path.exists(new_path) or not clean_new:
+            return False
+
+        try:
+            os.rename(old_path, new_path)
+            # Update metadata paths preserving IDs
+            meta = self._load_metadata()
+            for vid_id, v in meta.items():
+                rp = v.get("rel_path", "")
+                if rp.startswith(old_name + "/"):
+                    new_rp = clean_new + "/" + rp[len(old_name) + 1:]
+                    v["rel_path"] = new_rp
+                    v["folder"] = clean_new
+            self._save_metadata(meta)
+            return True
+        except Exception as e:
+            print(f"Error renaming folder: {e}")
+            return False
+
+    def delete_folder(self, folder_name: str) -> bool:
+        """Deletes a folder from disk. Videos inside are moved to 'Geral' to prevent data loss."""
+        if folder_name == "Geral":
+            return False  # Cannot delete default folder
+
+        folder_path = os.path.join(self.base_dir, folder_name)
+        if not os.path.exists(folder_path):
+            return False
+
+        geral_path = os.path.join(self.base_dir, "Geral")
+        os.makedirs(geral_path, exist_ok=True)
+
+        meta = self._load_metadata()
+
+        # Move any existing video files to Geral
+        for f in os.listdir(folder_path):
+            src_file = os.path.join(folder_path, f)
+            if os.path.isfile(src_file):
+                dst_file = os.path.join(geral_path, f)
+                final_f = f
+                if os.path.exists(dst_file):
+                    final_f = f"{int(time.time())}_{f}"
+                    dst_file = os.path.join(geral_path, final_f)
+                try:
+                    shutil.move(src_file, dst_file)
+                except Exception:
+                    pass
+
+        # Update metadata for moved videos
+        for vid_id, v in meta.items():
+            rp = v.get("rel_path", "")
+            if rp.startswith(folder_name + "/"):
+                fname = os.path.basename(rp)
+                v["rel_path"] = f"Geral/{fname}"
+                v["folder"] = "Geral"
+        self._save_metadata(meta)
+
+        try:
+            shutil.rmtree(folder_path)
+            return True
+        except Exception as e:
+            print(f"Error deleting folder: {e}")
+            return False
+
+    def move_video(self, video_id: str, target_folder: str) -> Optional[Dict[str, Any]]:
+        """Moves a video file to another folder on disk while preserving its ID."""
+        video = self.get_video_by_id(video_id)
+        if not video:
+            return None
+
+        src_path = video["full_path"]
+        dst_folder_path = os.path.join(self.base_dir, target_folder)
+        os.makedirs(dst_folder_path, exist_ok=True)
+
+        dst_path = os.path.join(dst_folder_path, video["filename"])
+        if src_path == dst_path:
+            return video
+
+        if os.path.exists(dst_path):
+            base, ext = os.path.splitext(video["filename"])
+            dst_path = os.path.join(dst_folder_path, f"{base}_{int(time.time())}{ext}")
+
+        try:
+            shutil.move(src_path, dst_path)
+            # Update metadata keeping the SAME video_id
+            meta = self._load_metadata()
+            entry = meta.get(video_id, {})
+            new_rel = os.path.relpath(dst_path, self.base_dir).replace("\\", "/")
+            entry["id"] = video_id
+            entry["rel_path"] = new_rel
+            entry["folder"] = target_folder
+            meta[video_id] = entry
+            self._save_metadata(meta)
+            return self.get_video_by_id(video_id)
+        except Exception as e:
+            print(f"Error moving video: {e}")
+            return None
+
+    def rename_video(self, video_id: str, new_title: str) -> bool:
+        """Renames a video's display title in metadata."""
+        video = self.get_video_by_id(video_id)
+        if not video:
+            return False
+        clean_title = new_title.strip()
+        if not clean_title:
+            return False
+
+        meta = self._load_metadata()
+        entry = meta.get(video_id, {})
+        entry["title"] = clean_title
+        entry["rel_path"] = video["rel_path"]
+        entry["folder"] = video["folder"]
+        meta[video_id] = entry
+        self._save_metadata(meta)
+        return True
+
+    def toggle_favorite(self, video_id: str) -> bool:
+        """Toggles the favorite state of a video."""
+        video = self.get_video_by_id(video_id)
+        if not video:
+            return False
+
+        meta = self._load_metadata()
+        entry = meta.get(video_id, {})
+        new_fav = not entry.get("is_favorite", False)
+        entry["is_favorite"] = new_fav
+        entry["rel_path"] = video["rel_path"]
+        entry["folder"] = video["folder"]
+        meta[video_id] = entry
+        self._save_metadata(meta)
+        return new_fav
+
+    def delete_video(self, video_id: str) -> bool:
+        """Deletes a video file from disk and cleans its metadata."""
+        video = self.get_video_by_id(video_id)
+        if not video:
+            return False
+
+        file_path = video.get("full_path")
+        try:
+            if file_path and os.path.exists(file_path):
+                deleted = False
+                for _ in range(3):
+                    try:
+                        os.remove(file_path)
+                        deleted = True
+                        break
+                    except PermissionError:
+                        time.sleep(0.15)
+                        import gc
+                        gc.collect()
+                if not deleted and os.path.exists(file_path):
+                    try:
+                        temp_name = file_path + f".del_{int(time.time())}"
+                        os.rename(file_path, temp_name)
+                        os.remove(temp_name)
+                    except Exception:
+                        pass
+
+            meta = self._load_metadata()
+            entry_meta = meta.get(video_id, {})
+            if entry_meta.get("storage_location") == "huggingface" or entry_meta.get("cloud_url"):
+                try:
+                    rel_p = entry_meta.get("rel_path") or (video.get("rel_path") if video else "")
+                    if rel_p:
+                        repo_p = f"videos/{rel_p}"
+                        cloud_storage.delete_file(repo_p)
+                except Exception as e:
+                    print(f"[VideoService] Erro ao excluir do Hugging Face: {e}")
+
+            if video_id in meta:
+                del meta[video_id]
+                self._save_metadata(meta)
+
+            # Cleanup cached thumbnail
+            thumb_path = os.path.join(self.thumbnails_dir, f"{video_id}.jpg")
+            if os.path.exists(thumb_path):
+                try:
+                    os.remove(thumb_path)
+                except Exception:
+                    pass
+
+            return True
+        except Exception as e:
+            print(f"Error deleting video {video_id}: {e}")
+            return False
+
+    def delete_multiple_videos(self, video_ids: list) -> list:
+        """Deletes multiple videos from disk."""
+        deleted = []
+        for vid in video_ids:
+            if self.delete_video(vid):
+                deleted.append(vid)
+        return deleted
+
+    def move_multiple_videos(self, video_ids: list, target_folder: str) -> list:
+        """Moves multiple videos to a target folder."""
+        moved = []
+        for vid in video_ids:
+            res = self.move_video(vid, target_folder)
+            if res:
+                moved.append(vid)
+        return moved
+
+    def _trigger_background_upload(self, vid_id: str, local_path: str, folder: str, filename: str):
+        """Uploads a video to Hugging Face asynchronously in background to prevent HTTP 504 timeout on Render."""
+        import threading
+        def _worker():
+            try:
+                if not cloud_storage.is_connected():
+                    logger.warning(f"[VideoService] HF não conectado, mantendo {vid_id} apenas local.")
+                    return
+                repo_path = f"videos/{folder}/{filename}"
+                logger.info(f"[VideoService] Iniciando upload em background para HF: {repo_path}")
+                cloud_url = cloud_storage.upload_file(local_path, repo_path)
+                if cloud_url:
+                    logger.info(f"[VideoService] Upload para HF concluído com sucesso: {cloud_url}")
+                    meta = self._load_metadata()
+                    if vid_id in meta:
+                        meta[vid_id]["storage_location"] = "huggingface"
+                        meta[vid_id]["cloud_url"] = cloud_url
+                        self._save_metadata(meta)
+                else:
+                    logger.warning(f"[VideoService] Upload para HF retornou vazio para {repo_path}")
+            except Exception as e:
+                logger.error(f"[VideoService] Erro no upload em background para HF ({vid_id}): {e}")
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+    def save_uploaded_file(self, filename: str, content: bytes, folder: str = "Geral") -> Optional[Dict[str, Any]]:
+        """Saves an uploaded video file to data/videos/{folder}/ and uploads to HF in background."""
+        folder_path = os.path.join(self.base_dir, folder)
+        os.makedirs(folder_path, exist_ok=True)
+
+        clean_filename = "".join(c for c in filename if c.isalnum() or c in (".", "-", "_")).strip()
+        if not clean_filename:
+            clean_filename = f"video_{int(time.time())}.mp4"
+
+        target_path = os.path.join(folder_path, clean_filename)
+        if os.path.exists(target_path):
+            base, ext = os.path.splitext(clean_filename)
+            target_path = os.path.join(folder_path, f"{base}_{int(time.time())}{ext}")
+
+        try:
+            with open(target_path, "wb") as fp:
+                fp.write(content)
+
+            file_size = len(content)
+            title = os.path.splitext(clean_filename)[0].replace("_", " ")
+            rel_path = os.path.relpath(target_path, self.base_dir).replace("\\", "/")
+            vid_id = self._get_video_id(rel_path)
+
+            self._update_single_metadata(
+                target_path,
+                title=title,
+                folder=folder,
+                is_favorite=False,
+                vid_id=vid_id,
+                storage_location="render_local",
+                file_size_bytes=file_size
+            )
+
+            # Upload assíncrono para Hugging Face sem travar a resposta HTTP
+            self._trigger_background_upload(vid_id, target_path, folder, os.path.basename(target_path))
+
+            return self.get_video_by_id(vid_id)
+        except Exception as e:
+            print(f"Error saving uploaded video: {e}")
+            return None
+
+    def save_uploaded_file_stream(self, filename: str, file_obj: Any, folder: str = "Geral") -> Optional[Dict[str, Any]]:
+        """Saves an uploaded video stream directly to disk using 8MB chunks without loading whole file to RAM."""
+        folder_path = os.path.join(self.base_dir, folder)
+        os.makedirs(folder_path, exist_ok=True)
+
+        clean_filename = "".join(c for c in filename if c.isalnum() or c in (".", "-", "_")).strip()
+        if not clean_filename:
+            clean_filename = f"video_{int(time.time())}.mp4"
+
+        target_path = os.path.join(folder_path, clean_filename)
+        if os.path.exists(target_path):
+            base, ext = os.path.splitext(clean_filename)
+            target_path = os.path.join(folder_path, f"{base}_{int(time.time())}{ext}")
+
+        try:
+            total_bytes = 0
+            with open(target_path, "wb") as fp:
+                while True:
+                    chunk = file_obj.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    fp.write(chunk)
+                    total_bytes += len(chunk)
+
+            title = os.path.splitext(clean_filename)[0].replace("_", " ")
+            rel_path = os.path.relpath(target_path, self.base_dir).replace("\\", "/")
+            vid_id = self._get_video_id(rel_path)
+
+            self._update_single_metadata(
+                target_path,
+                title=title,
+                folder=folder,
+                is_favorite=False,
+                vid_id=vid_id,
+                storage_location="render_local",
+                file_size_bytes=total_bytes
+            )
+
+            # Upload assíncrono para Hugging Face sem travar a resposta HTTP
+            self._trigger_background_upload(vid_id, target_path, folder, os.path.basename(target_path))
+
+            return self.get_video_by_id(vid_id)
+        except Exception as e:
+            print(f"Error saving uploaded video stream: {e}")
+            return None
+
+    def import_local_path(self, local_path: str, target_folder: str = "Geral", mode: str = "copy") -> List[Dict[str, Any]]:
+        """
+        Imports a video file or all videos from a local folder on the PC directly.
+        Uses fast OS-level file copy/move, completing in fractions of a second.
+        """
+        clean_path = local_path.strip().strip('"').strip("'").strip()
+        if not os.path.exists(clean_path):
+            raise FileNotFoundError(f"Caminho não encontrado no computador: {clean_path}")
+
+        dest_dir = os.path.join(self.base_dir, target_folder)
+        os.makedirs(dest_dir, exist_ok=True)
+
+        imported = []
+
+        def _import_single_file(src_file: str):
+            ext = os.path.splitext(src_file)[1].lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                return None
+            fname = os.path.basename(src_file)
+            target_dest = os.path.join(dest_dir, fname)
+            if os.path.exists(target_dest):
+                base, ext_ = os.path.splitext(fname)
+                target_dest = os.path.join(dest_dir, f"{base}_{int(time.time())}{ext_}")
+
+            if mode == "move":
+                shutil.move(src_file, target_dest)
+            else:
+                shutil.copy2(src_file, target_dest)
+
+            title = os.path.splitext(os.path.basename(target_dest))[0].replace("_", " ")
+            rel_path = os.path.relpath(target_dest, self.base_dir).replace("\\", "/")
+            vid_id = self._update_single_metadata(target_dest, title=title, folder=target_folder, is_favorite=False)
+            self._trigger_background_upload(vid_id, target_dest, target_folder, os.path.basename(target_dest))
+            stat = os.stat(target_dest)
+            return {
+                "id": vid_id,
+                "title": title,
+                "filename": os.path.basename(target_dest),
+                "folder": target_folder,
+                "file_size_bytes": stat.st_size,
+                "format": ext[1:].upper(),
+                "is_favorite": False,
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+                "rel_path": rel_path,
+                "stream_url": f"/api/videos/{vid_id}/stream",
+                "download_url": f"/api/videos/{vid_id}/download",
+                "thumbnail_url": f"/api/videos/{vid_id}/thumbnail"
+            }
+
+        if os.path.isfile(clean_path):
+            item = _import_single_file(clean_path)
+            if item:
+                imported.append(item)
+        elif os.path.isdir(clean_path):
+            for root, dirs, files in os.walk(clean_path):
+                for f in files:
+                    full_f = os.path.join(root, f)
+                    item = _import_single_file(full_f)
+                    if item:
+                        imported.append(item)
+
+        return imported
+
+    def open_in_explorer(self, folder: str = "Geral") -> bool:
+        """Opens target video folder in Windows Explorer."""
+        target_dir = os.path.join(self.base_dir, folder)
+        os.makedirs(target_dir, exist_ok=True)
+        if sys.platform == "win32":
+            try:
+                os.startfile(target_dir)
+                return True
+            except Exception as e:
+                print(f"Error opening explorer: {e}")
+                return False
+        return False
+
+    def get_or_generate_thumbnail(self, video_id: str) -> Optional[str]:
+        """
+        Retrieves or dynamically extracts a smart thumbnail for a video.
+        Uses intelligent luminance detection to skip initial black frames (fades, dark intros).
+        Saves as lightweight 640x360 JPEG in data/videos/.thumbnails/{video_id}.jpg.
+        """
+        thumb_path = os.path.join(self.thumbnails_dir, f"{video_id}.jpg")
+        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 500:
+            return thumb_path
+
+        video = self.get_video_by_id(video_id)
+        if not video:
+            return None
+
+        video_path = video.get("full_path")
+        if not video_path or not os.path.exists(video_path):
+            return None
+
+        if not HAS_OPENCV:
+            return None
+
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return None
+
+            fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+            total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            duration = total_frames / fps if fps > 0 else 0
+
+            # Candidate timestamps to sample (in milliseconds):
+            # 1.5s, 3.0s, 5.0s, 10% of duration, 0.8s
+            candidates = [1500, 3000, 5000, 800, 500]
+            if duration > 8:
+                candidates.insert(0, int(min(duration * 0.1, 10.0) * 1000))
+
+            best_frame = None
+            best_brightness = -1.0
+
+            for ms in candidates:
+                cap.set(cv2.CAP_PROP_POS_MSEC, ms)
+                ret, frame = cap.read()
+                if ret and frame is not None and frame.size > 0:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    brightness = float(np.mean(gray))
+                    if brightness > best_brightness:
+                        best_brightness = brightness
+                        best_frame = frame
+                    # If frame is vivid and bright enough (average luminance > 30), accept it immediately
+                    if brightness > 30:
+                        break
+
+            if best_frame is None:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    best_frame = frame
+
+            cap.release()
+
+            if best_frame is not None:
+                h, w = best_frame.shape[:2]
+                target_w = 640
+                target_h = int(h * (target_w / w)) if w > 0 else 360
+                resized = cv2.resize(best_frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+                os.makedirs(self.thumbnails_dir, exist_ok=True)
+                cv2.imwrite(thumb_path, resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+                # Espelha a thumbnail gerada no Hugging Face em background
+                try:
+                    import threading
+                    threading.Thread(
+                        target=lambda: cloud_storage.upload_file(thumb_path, f"thumbnails/{video_id}.jpg"),
+                        daemon=True
+                    ).start()
+                except Exception:
+                    pass
+
+                return thumb_path
+        except Exception as e:
+            print(f"Error generating thumbnail for {video_id}: {e}")
+            return None
+        return None
+
+
+video_service = VideoService()
