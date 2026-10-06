@@ -4,7 +4,7 @@ set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
 
-echo Iniciando o servidor na porta 8000...
+echo Starting server on port 8000...
 echo.
 
 if exist "%LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe" (
