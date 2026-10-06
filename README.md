@@ -70,7 +70,7 @@ python -m src.main
 
 To compile the frontend with Vite and package everything into `dist/main.exe`:
 
-1. Simply double-click the **`compilar_executavel.bat`** script in the project root.
+1. Simply double-click the **`build_executable.bat`** script in the project root.
 2. The script will automatically:
    * Build the frontend (`npm run build`).
    * Verify Playwright Chromium dependencies.
@@ -156,7 +156,7 @@ python -m src.main
 
 Para compilar o frontend com Vite e empacotar tudo no `dist/main.exe`:
 
-1. Basta dar dois cliques no script **`compilar_executavel.bat`** na raiz do projeto.
+1. Basta dar dois cliques no script **`build_executable.bat`** na raiz do projeto.
 2. O script vai automaticamente:
    * Rodar o build do frontend (`npm run build`).
    * Verificar o Chromium do Playwright.

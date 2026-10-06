@@ -323,7 +323,7 @@ export const ExtractorView: React.FC = () => {
       title: t.failStartExtraction || 'Falha ao Iniciar Extração',
       message: backendOnline
         ? (t.failStartExtractionMsg || 'O servidor backend não conseguiu iniciar a tarefa para esta URL. Verifique a URL informada.')
-        : (t.backendOfflineMsg || 'O backend Python está offline. Inicie o servidor via iniciar_servidor.bat (porta 8000).'),
+        : (t.backendOfflineMsg || 'O backend Python está offline. Inicie o servidor via start_server.bat (porta 8000).'),
       type: 'warning'
     });
   };
