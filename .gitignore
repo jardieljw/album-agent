@@ -30,7 +30,7 @@ data/*.cache
 # Root-level debug/test scripts (not part of the app)
 find_box.py
 print_buttons.py
-test_*.py
+/test_*.py
 probe_*.json
 gallery_render_html.txt
 mock-preview/
