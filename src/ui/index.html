@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-First Browser Agent | Autonomous Album & 4K Discovery</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-brand">
+                <div class="logo-badge">AI</div>
+                <div>
+                    <h1>AI-First Browser Agent</h1>
+                    <p class="subtitle">General-Purpose Autonomous Album Comprehension & 4K Original Discovery</p>
+                </div>
+            </div>
+            <div class="header-controls">
+                <div class="model-select-wrapper">
+                    <label for="modelSelect" class="model-label">Reasoning Engine:</label>
+                    <select id="modelSelect" class="model-dropdown">
+                        <option value="qwen2.5:32b">qwen2.5:32b (Recommended / High Precision)</option>
+                        <option value="qwen2.5:14b">qwen2.5:14b (Balanced)</option>
+                        <option value="qwen2.5:7b">qwen2.5:7b (Fast)</option>
+                        <option value="qwen2.5-coder:32b">qwen2.5-coder:32b (Code Specialist)</option>
+                    </select>
+                </div>
+                <div class="header-status" id="engineStatus">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Agent Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Active Background Jobs Banner (Persists across page reloads / mobile) -->
+        <div class="active-jobs-banner hidden" id="activeJobsBanner">
+            <div class="jobs-header">
+                <span class="jobs-live-dot"></span>
+                <strong>Active Server Extractions (<span id="activeJobsCount">0</span>)</strong>
+                <span class="jobs-subtext">— Runs in background even if browser tab is closed</span>
+            </div>
+            <div class="jobs-list" id="activeJobsList"></div>
+        </div>
+
+        <!-- Mode Selection Tabs -->
+        <div class="mode-tabs">
+            <button class="mode-tab active" id="tabMode1"> Mode 1: Autonomous Extraction</button>
+            <button class="mode-tab" id="tabMode2"> Mode 2: Teach the AI (Demonstration)</button>
+            <button class="mode-tab" id="tabLibrary"> Saved Storage / Library (<span id="savedAlbumsCount">0</span>)</button>
+        </div>
+
+        <!-- Control Panel for Mode 1 & AI Autonomous Mode -->
+        <section class="control-panel" id="panelMode1">
+            <div class="engine-choice-bar">
+                <span class="engine-choice-title">Select Intelligence Engine:</span>
+                <div class="engine-radios">
+                    <label class="engine-radio-btn active" id="engineAiReactLabel">
+                        <input type="radio" name="engineType" value="ai_react" checked id="engineAiReactRadio">
+                        <strong> 7-Pillar AI Autonomous ReAct Agent (Recommended)</strong>
+                        <span class="engine-hint">Fast speculative 4K probing, visual Set-of-Marks, API interception & meta-learning</span>
+                    </label>
+                    <label class="engine-radio-btn" id="engineClassicLabel">
+                        <input type="radio" name="engineType" value="classic" id="engineClassicRadio">
+                        <strong> Classic Semantic Brain (Deterministic Mode 1)</strong>
+                        <span class="engine-hint">Classic DOM traversal with rule induction</span>
+                    </label>
+                </div>
+            </div>
+
+            <form id="analyzeForm" class="search-form">
+                <div class="mode1-inputs">
+                    <div class="input-wrapper" id="singleUrlWrapper">
+                        <input type="text" id="targetUrl" placeholder="Enter gallery or forum URL (e.g. https://... or http://localhost:8000/mock/gallery/album-1)" autocomplete="off" spellcheck="false" />
+                        <button type="submit" id="submitBtn" class="btn-primary">
+                            <span class="btn-text">Investigate & Extract</span>
+                        </button>
+                    </div>
+                    <div class="batch-url-wrapper hidden" id="batchUrlWrapper">
+                        <textarea id="batchUrlsInput" placeholder="Paste multiple album URLs (one per line) to extract concurrently in the background...&#10;https://example.com/album-1&#10;https://example.com/album-2" rows="3"></textarea>
+                        <button type="button" id="btnBatchSubmit" class="btn-primary">
+                            <span class="btn-text"> Extract All URLs Concurrently</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="mode1-toolbar">
+                    <button type="button" class="btn-toggle-batch" id="btnToggleBatchMode"> Switch to Multi-URL Batch Input</button>
+                    <div class="quick-links">
+                        <span>Quick Test Scenarios:</span>
+                        <button type="button" class="chip" data-url="/mock/gallery/album-1">Type A: Gallery (15 Items + Related)</button>
+                        <button type="button" class="chip" data-url="/mock/forum/thread-42">Type B: Forum (External Link)</button>
+                        <button type="button" class="chip" data-url="/mock/gallery/hard-negative">Hard Negative (Banner)</button>
+                        <button type="button" class="chip" data-url="/mock/gallery/json-state">Type D: JSON State</button>
+                        <button type="button" class="chip" data-url="/mock/gallery/unresolvable">Type G: Mixed Unresolved</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <!-- Control Panel for Mode 2 (Teaching Workspace) -->
+        <section class="control-panel hidden" id="panelMode2">
+            <div class="teaching-header">
+                <h3>Learning by Demonstration Workspace</h3>
+                <p class="subtitle">Scan the page, select candidates in bulk (or Shift+Click), optionally paste 1–2 real 4K URLs for Qwen AI pattern induction, and generalize knowledge for the entire domain.</p>
+            </div>
+
+            <div class="engine-choice-bar">
+                <span class="engine-choice-title">Select Intelligence Brain to Teach:</span>
+                <div class="engine-radios">
+                    <label class="engine-radio-btn active" id="teachEngineBothLabel">
+                        <input type="radio" name="teachEngineType" value="both" checked id="teachEngineBothRadio">
+                        <strong> Both Brains (Synchronized Teaching - Recommended)</strong>
+                        <span class="engine-hint">Simultaneously trains ReAct Meta-Knowledge Graph & Semantic Domain Store</span>
+                    </label>
+                    <label class="engine-radio-btn" id="teachEngineAiReactLabel">
+                        <input type="radio" name="teachEngineType" value="ai_react" id="teachEngineAiReactRadio">
+                        <strong> 7-Pillar AI Autonomous ReAct Agent</strong>
+                        <span class="engine-hint">Learns structural archetype recipes in data/meta_knowledge_graph.json</span>
+                    </label>
+                    <label class="engine-radio-btn" id="teachEngineClassicLabel">
+                        <input type="radio" name="teachEngineType" value="classic" id="teachEngineClassicRadio">
+                        <strong> Classic Semantic Brain</strong>
+                        <span class="engine-hint">Learns domain-specific semantic priors in data/knowledge/</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="teaching-input-row">
+                <input type="text" id="teachUrl" placeholder="Enter URL to scan and teach..." autocomplete="off" spellcheck="false" required />
+                <button type="button" id="scanBtn" class="btn-primary">Scan Candidates</button>
+                <button type="button" id="teachSubmitBtn" class="btn-teach" disabled> Generalize & Resolve Originals</button>
+            </div>
+
+            <!-- Batch Selection & Actions Toolbar -->
+            <div class="batch-selection-bar" id="batchSelectionBar">
+                <div class="batch-select-actions">
+                    <button type="button" class="batch-btn" id="btnSelectAll"> Select All</button>
+                    <button type="button" class="batch-btn" id="btnDeselectAll"> Deselect All</button>
+                    <button type="button" class="batch-btn" id="btnInvertSelection"> Invert</button>
+                    <button type="button" class="batch-btn highlight" id="btnSelectSameContainer" title="Select all images that share the same container as current selection"> Select Same Container</button>
+                    <span class="batch-badge" id="batchSelectedCount">0 selected</span>
+                </div>
+                <div class="batch-apply-actions">
+                    <button type="button" class="btn-batch-apply pos" id="btnBatchMarkPos" disabled>+ Mark Selected as Album</button>
+                    <button type="button" class="btn-batch-apply neg" id="btnBatchMarkNeg" disabled>- Mark Selected as Noise</button>
+                </div>
+            </div>
+
+            <div class="teaching-stats" id="teachStats">
+                <span>Selected Positives: <strong id="countPos">0</strong></span>
+                <span>Selected Negatives: <strong id="countNeg">0</strong></span>
+                <span>Ground-Truth 4K URLs: <strong id="countGroundTruth">0</strong></span>
+                <span class="teach-tip"> Tip: Use Shift + Click to select multiple cards, or paste a known 4K URL on any card for Qwen LLM pattern induction!</span>
+            </div>
+
+            <!-- Candidate Visual Grid -->
+            <div class="candidate-picker-grid" id="candidatePickerGrid"></div>
+        </section>
+
+        <!-- Control Panel / View for Library (Saved Storage with Windows Explorer Style) -->
+        <section class="control-panel hidden" id="panelLibrary">
+            <div class="explorer-toolbar">
+                <div class="explorer-search-group">
+                    <input type="text" id="librarySearchInput" class="explorer-search-input" placeholder=" Pesquisar álbuns por título, link original ou data..." />
+                    <select id="libraryStatusFilter" class="explorer-filter-select">
+                        <option value="all">Todos os Status</option>
+                        <option value="resolved">100% 4K Resolvido</option>
+                        <option value="unresolved">Com Não Resolvidos</option>
+                    </select>
+                </div>
+
+                <div class="explorer-controls-group">
+                    <!-- Sort Dropdown (Windows Explorer Style) -->
+                    <div class="explorer-dropdown-wrapper">
+                        <label for="explorerSortBy" class="explorer-label">Classificar por:</label>
+                        <select id="explorerSortBy" class="explorer-select">
+                            <option value="date">Data</option>
+                            <option value="name">Nome</option>
+                            <option value="count">Tamanho / Qtd</option>
+                            <option value="resolution">Dimensões</option>
+                            <option value="status">Classificação</option>
+                        </select>
+                    </div>
+
+                    <!-- Sort Order Toggle -->
+                    <button type="button" class="btn-explorer-order" id="btnSortOrder" title="Alternar Ordem Crescente / Decrescente">
+                        <span id="sortOrderIcon">▼</span> <span id="sortOrderLabel">Decrescente</span>
+                    </button>
+
+                    <!-- View Mode Dropdown (Windows Explorer Style) -->
+                    <div class="explorer-dropdown-wrapper">
+                        <label for="explorerViewMode" class="explorer-label">Modo de Exibição:</label>
+                        <select id="explorerViewMode" class="explorer-select">
+                            <option value="grid-lg">Ícones grandes</option>
+                            <option value="grid-xl">Ícones extra grandes</option>
+                            <option value="grid-md">Ícones médios</option>
+                            <option value="grid-sm">Ícones pequenos</option>
+                            <option value="list">Lista</option>
+                            <option value="details">Detalhes</option>
+                            <option value="tiles">Blocos</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Library View Container -->
+            <div class="library-container grid-lg" id="libraryContainer">
+                <div class="empty-audit">Nenhum álbum salvo em disco ainda. Execute uma extração no Modo 1 ou Modo 2!</div>
+            </div>
+        </section>
+
+        <!-- Real-Time Telemetry Bar -->
+        <section class="telemetry-bar" id="telemetryBar">
+            <div class="metric-card">
+                <div class="metric-value" id="mAiActions">0</div>
+                <div class="metric-label">AI Actions</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="mBrowserActions">0</div>
+                <div class="metric-label">Browser Actions</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="mDiscovered">0</div>
+                <div class="metric-label">Discovered</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="mInvestigated">0</div>
+                <div class="metric-label">Investigated</div>
+            </div>
+            <div class="metric-card metric-success">
+                <div class="metric-value" id="mResolved">0</div>
+                <div class="metric-label">Originals Resolved</div>
+            </div>
+            <div class="metric-card metric-warning">
+                <div class="metric-value" id="mUnresolved">0</div>
+                <div class="metric-label">Unresolved</div>
+            </div>
+            <div class="metric-card metric-danger">
+                <div class="metric-value" id="mBanners">0</div>
+                <div class="metric-label">Banners Rejected</div>
+            </div>
+            <div class="metric-card metric-muted">
+                <div class="metric-value" id="mRelated">0</div>
+                <div class="metric-label">Related Filtered</div>
+            </div>
+        </section>
+
+        <!-- Main Content Area: Album & Observability Grid -->
+        <main class="main-layout" id="mainLayout">
+            <!-- Album Presentation -->
+            <section class="album-section" id="albumSection">
+                <div class="empty-state" id="emptyState">
+                    <div class="empty-icon"></div>
+                    <h3>No Album Active</h3>
+                    <p>Enter a URL above, choose a test scenario, or load an album from your Saved Library.</p>
+                </div>
+
+                <!-- Multi-Album Navigation Bar (Visible when 2+ albums are active) -->
+                <div class="multi-album-nav hidden" id="multiAlbumNav">
+                    <div class="multi-album-label">Álbuns Ativos:</div>
+                    <div class="multi-album-tabs" id="multiAlbumTabs"></div>
+                </div>
+
+                <!-- Dynamic Albums Container -->
+                <div class="albums-container" id="albumsContainer">
+                    <div class="album-card hidden" id="albumCard" data-session-id="">
+                        <div class="album-header-banner">
+                            <div class="album-meta-info">
+                                <div class="album-header-row">
+                                    <div>
+                                        <div class="badge-row">
+                                            <span class="badge badge-source album-source-type">Gallery</span>
+                                            <span class="badge badge-count album-image-count">0 Images</span>
+                                            <span class="badge badge-model album-model-badge">Qwen 2.5:32b</span>
+                                            <span class="badge badge-date album-date-badge">Saved</span>
+                                        </div>
+                                        <h2 class="album-title">Discovered Album</h2>
+                                        <p class="album-source-url">Source: https://...</p>
+                                    </div>
+                                    <div class="album-download-toolbar">
+                                        <button type="button" class="btn-rename-album btn-rename-target" title="Rename album title"> Renomear</button>
+                                        <button type="button" class="btn-download-zip btn-zip-target" title="Download all high-res 4K images packaged in a structured ZIP">⬇ Download Full Album (ZIP)</button>
+                                        <button type="button" class="btn-export-json btn-json-target" title="Download complete JSON metadata entity"> Export JSON</button>
+                                        <button type="button" class="btn-delete-album btn-delete-target" title="Delete album permanently from disk"> Excluir</button>
+                                    </div>
+                                </div>
+                                <div class="provenance-chain hidden album-provenance"></div>
+                            </div>
+
+                            <!-- Active Gallery Explorer View & Sort Controls -->
+                            <div class="active-gallery-toolbar">
+                                <div class="gallery-controls-left">
+                                    <span class="gallery-toolbar-label">Exibição:</span>
+                                    <div class="view-buttons-group">
+                                        <button type="button" class="btn-view-mode active" data-mode="grid-lg" title="Ícones grandes"> Grandes</button>
+                                        <button type="button" class="btn-view-mode" data-mode="grid-xl" title="Ícones extra grandes"> Extra Grandes</button>
+                                        <button type="button" class="btn-view-mode" data-mode="grid-md" title="Ícones médios"> Médios</button>
+                                        <button type="button" class="btn-view-mode" data-mode="grid-sm" title="Ícones pequenos">⊞ Pequenos</button>
+                                        <button type="button" class="btn-view-mode" data-mode="list" title="Lista"> Lista</button>
+                                        <button type="button" class="btn-view-mode" data-mode="details" title="Detalhes">≣ Detalhes</button>
+                                        <button type="button" class="btn-view-mode" data-mode="tiles" title="Blocos"> Blocos</button>
+                                    </div>
+                                </div>
+                                <div class="gallery-controls-right">
+                                    <label class="gallery-toolbar-label">Ordenar:</label>
+                                    <select class="gallery-sort-select explorer-select">
+                                        <option value="position">Ordem Original (#)</option>
+                                        <option value="resolution">Maior Resolução (4K)</option>
+                                        <option value="status">Status (Resolvidos primeiro)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Image Grid / Table -->
+                        <div class="gallery-grid grid-lg"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Observability & Live Terminal Drawer -->
+            <aside class="observability-panel" id="observabilityPanel">
+                <!-- Terminal Header Bar -->
+                <div class="terminal-header-bar">
+                    <div class="terminal-title-group">
+                        <div class="terminal-led pulse-online" id="terminalLiveLed"></div>
+                        <h3 class="terminal-title">Cognitive Console</h3>
+                        <span class="terminal-live-badge" id="terminalLiveStatus">LIVE</span>
+                    </div>
+                    <div class="terminal-actions-group">
+                        <button type="button" class="btn-terminal-action btn-terminal-stop hidden" id="btnStopCurrentJob" title="Cancel current background extraction">⏹ Interromper</button>
+                        <button type="button" class="btn-terminal-action" id="btnCopyTerminalLogs" title="Copiar todos os logs para a área de transferência"> Copiar</button>
+                        <button type="button" class="btn-terminal-action" id="btnClearTerminalLogs" title="Limpar console"> Limpar</button>
+                        <button type="button" class="btn-terminal-action active" id="btnToggleAutoScroll" title="Alternar Rolagem Automática">⬇ Auto-scroll</button>
+                    </div>
+                </div>
+
+                <!-- Terminal Filter Tabs -->
+                <div class="terminal-tabs-bar">
+                    <button type="button" class="terminal-tab active" data-filter="all"> Todos (<span id="countLogsAll">0</span>)</button>
+                    <button type="button" class="terminal-tab" data-filter="llm"> LLM & ReAct</button>
+                    <button type="button" class="terminal-tab" data-filter="probes"> Sondagens</button>
+                    <button type="button" class="terminal-tab" data-filter="network"> Rede API</button>
+                    <button type="button" class="terminal-tab" data-filter="learning"> Aprendizado</button>
+                    <button type="button" class="terminal-tab" data-filter="ledger"> Ledger (<span id="auditCountBadge">0</span>)</button>
+                </div>
+
+                <!-- Learning Event Box (Contained inside panel with internal scroll) -->
+                <div class="learning-event-box hidden" id="learningEventBox">
+                    <div class="learning-box-header">
+                        <h4> LEARNING EVENT PRIORS</h4>
+                        <span class="learning-domain-badge" id="learningEventSummary">Domain: -</span>
+                    </div>
+                    <ul class="learning-event-list" id="learningEventList"></ul>
+                </div>
+
+                <!-- Main Monospace Terminal Viewport -->
+                <div class="terminal-viewport" id="liveTerminalConsole">
+                    <div class="terminal-welcome">
+                        <span class="terminal-prompt">$</span> AI Browser Intelligence Agent Engine initialized.
+                        <br><span class="terminal-prompt">$</span> Ready for autonomous extraction or demonstration learning.
+                    </div>
+                </div>
+
+                <!-- Candidate Audit Ledger View (Visible when 'ledger' tab selected) -->
+                <div class="audit-list hidden" id="auditList">
+                    <div class="empty-audit">Audit logs and candidate ledgers will appear here during execution.</div>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- Modal Viewer with Resolution Comparator -->
+    <div class="modal hidden" id="imageModal">
+        <div class="modal-overlay" id="modalOverlay"></div>
+        <div class="modal-content">
+            <button class="modal-close" id="modalClose">&times;</button>
+            <div class="modal-body">
+                <img id="modalImage" src="" alt="Full Resolution Image" referrerpolicy="no-referrer" />
+                <div class="modal-meta" id="modalMeta"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Renaming Album -->
+    <div class="modal hidden" id="renameModal">
+        <div class="modal-overlay" id="renameModalOverlay"></div>
+        <div class="modal-dialog">
+            <h3> Renomear Álbum</h3>
+            <p class="modal-subtext">O título original coletado do site original permanecerá registrado intacto.</p>
+            <input type="text" id="renameTitleInput" class="rename-input" placeholder="Novo título para o álbum..." />
+            <div class="modal-actions">
+                <button type="button" class="btn-secondary" id="btnCancelRename">Cancelar</button>
+                <button type="button" class="btn-primary" id="btnConfirmRename">Salvar Nome</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Deleting Album -->
+    <div class="modal hidden" id="deleteModal">
+        <div class="modal-overlay" id="deleteModalOverlay"></div>
+        <div class="modal-dialog">
+            <h3> Excluir Álbum por Completo?</h3>
+            <p class="modal-subtext">Isso apagará o álbum permanentemente da memória e do disco (<code id="deleteAlbumFilename"></code>).</p>
+            <div class="modal-actions">
+                <button type="button" class="btn-secondary" id="btnCancelDelete">Cancelar</button>
+                <button type="button" class="btn-danger" id="btnConfirmDelete">Sim, Excluir Definitivamente</button>
+    <!-- Co-Pilot Interactive Modal -->
+    <div class="modal hidden" id="copilotModal">
+        <div class="modal-overlay" id="copilotModalOverlay"></div>
+        <div class="modal-dialog copilot-dialog">
+            <div class="copilot-header">
+                <div class="copilot-title-row">
+                    <span class="copilot-badge"> Co-Pilot Assistant</span>
+                    <span class="copilot-timer" id="copilotTimer">30s</span>
+                </div>
+                <p class="copilot-question" id="copilotQuestionText">Question text...</p>
+            </div>
+            <div class="copilot-snapshot-container hidden" id="copilotSnapshotContainer">
+                <img id="copilotSnapshotImg" src="" alt="Set-of-Marks Snapshot" />
+            </div>
+            <div class="copilot-options-list" id="copilotOptionsList"></div>
+            <div class="copilot-custom-input-row">
+                <input type="text" id="copilotTextInput" class="copilot-input" placeholder="Or type custom instruction..." />
+                <button type="button" class="btn-primary" id="copilotSubmitCustom">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

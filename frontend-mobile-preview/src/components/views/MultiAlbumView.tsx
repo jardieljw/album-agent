@@ -1,0 +1,1237 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Compass,
+  Search,
+  Sparkles,
+  ExternalLink,
+  Layers,
+  ArrowRight,
+  AlertCircle,
+  Loader2,
+  FolderHeart,
+  Maximize2,
+  X,
+  CheckSquare,
+  Square,
+  Download,
+  Folder,
+  FolderDown,
+  ChevronDown,
+  CheckCircle2,
+  Clock,
+  RotateCcw,
+  Check
+} from 'lucide-react';
+import { useAppStore } from '../../store/useAppStore';
+import { backendApi } from '../../services/realApi';
+import { soundEffects } from '../../services/soundEffects';
+import { translations } from '../../i18n/translations';
+import { FolderSelectModal } from '../common/FolderSelectModal';
+import { SavedRedirectBadge } from '../common/SavedRedirectBadge';
+import { IconBadge } from '../common/IconBadge';
+
+interface DiscoveredItem {
+  title: string;
+  url: string;
+  thumbnail_url?: string | null;
+  source_type: 'related' | 'performer_page' | 'search';
+  total_images_hint?: number;
+}
+
+const normalizeUrl = (u?: string | null): string => {
+  if (!u) return '';
+  return u.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+};
+
+export const MultiAlbumView: React.FC = () => {
+  const {
+    multiAlbumState,
+    setMultiAlbumState,
+    clearMultiAlbumState,
+    navigateToView,
+    jobs,
+    albums,
+    albumFolders,
+    syncJobs,
+    syncAlbums,
+    settings,
+    checkItemSavedStatus,
+    markItemAsSavedOptimistically
+  } = useAppStore();
+
+  const t = translations[settings.language].multiAlbum || translations['en-US'].multiAlbum;
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+
+  // Destination folder state
+  const [destinationFolder, setDestinationFolder] = useState<string>('');
+  const [folderModalState, setFolderModalState] = useState<{
+    isOpen: boolean;
+    mode: 'single' | 'batch';
+    targetAlbum?: DiscoveredItem;
+  }>({ isOpen: false, mode: 'single' });
+
+  // Optimistic queue state for immediate card feedback
+  const [optimisticQueuedUrls, setOptimisticQueuedUrls] = useState<Set<string>>(new Set());
+
+  // Batch Action States
+  const [isSavingBatch, setIsSavingBatch] = useState(false);
+  const [isDownloadingBatch, setIsDownloadingBatch] = useState(false);
+  const [showDownloadDropdown, setShowDownloadDropdown] = useState(false);
+  const [activeTab, setActiveTab] = useState<'main' | 'recommended' | 'all'>('main');
+  const [toast, setToast] = useState<{ type: 'success' | 'info' | 'error'; message: string; actionLabel?: string; onAction?: () => void } | null>(null);
+
+  // Read persisted form and results
+  const url = multiAlbumState.url || '';
+  const performerName = multiAlbumState.performerName || '';
+  const maxRelated = multiAlbumState.maxRelated || 0;
+  const results: DiscoveredItem[] = multiAlbumState.results || [];
+  const streamingStatus = multiAlbumState.streamingStatus || '';
+  const lastSearchedPerformer = multiAlbumState.lastSearchedPerformer || null;
+  const selectedUrls = useMemo(() => new Set(multiAlbumState.selectedUrls || []), [multiAlbumState.selectedUrls]);
+
+  // Sync albums & jobs on mount
+  useEffect(() => {
+    syncAlbums();
+    syncJobs();
+  }, []);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  const handleDiscover = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!url.trim()) {
+      setError(t.urlRequiredError);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setMultiAlbumState({
+      results: [],
+      selectedUrls: [],
+      streamingStatus: t.connectingStream,
+      lastSearchedPerformer: performerName.trim() || null
+    });
+    setShowDownloadDropdown(false);
+
+    try {
+      const res = await fetch('/api/multi-album/discover-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: url.trim(),
+          performer_name: performerName.trim() || null,
+          max_related: maxRelated,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Erro HTTP ${res.status}`);
+      }
+
+      if (!res.body) {
+        throw new Error(t.streamNotSupported);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentResults: DiscoveredItem[] = [];
+
+      let pendingBatch: DiscoveredItem[] = [];
+      let lastFlush = Date.now();
+
+      const flushBatch = () => {
+        if (pendingBatch.length > 0) {
+          currentResults = [...currentResults, ...pendingBatch];
+          pendingBatch = [];
+          setMultiAlbumState({ results: currentResults });
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data: ')) {
+            try {
+              const payload = JSON.parse(trimmed.slice(6));
+              if (payload.type === 'album' && payload.album) {
+                const exists = currentResults.some((a) => a.url === payload.album.url) || pendingBatch.some((a) => a.url === payload.album.url);
+                if (!exists) {
+                  pendingBatch.push(payload.album);
+                  if (Date.now() - lastFlush > 100 || pendingBatch.length >= 20) {
+                    flushBatch();
+                    lastFlush = Date.now();
+                  }
+                }
+              } else if (payload.type === 'status') {
+                setMultiAlbumState({ streamingStatus: payload.message || '' });
+              } else if (payload.type === 'done') {
+                flushBatch();
+                setMultiAlbumState({ streamingStatus: t.streamDone.replace('{total}', String(payload.total)) });
+              }
+            } catch (_) {}
+          }
+        }
+      }
+      flushBatch();
+    } catch (err: any) {
+      setError(err.message || t.streamFetchError);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExtractSingle = (albumUrl: string) => {
+    try {
+      localStorage.setItem('imagex_extractor_single_url', albumUrl);
+      localStorage.setItem('imagex_extractor_tab', 'single');
+    } catch (_) {}
+    navigateToView('extractor');
+  };
+
+  // Selection toggles
+  const toggleSelect = (albumUrl: string) => {
+    const next = new Set(selectedUrls);
+    if (next.has(albumUrl)) {
+      next.delete(albumUrl);
+    } else {
+      next.add(albumUrl);
+    }
+    setMultiAlbumState({ selectedUrls: Array.from(next) });
+  };
+
+  const savedAlbumUrls = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of albums) {
+      if (a.sourceUrl) set.add(normalizeUrl(a.sourceUrl));
+    }
+    return set;
+  }, [albums]);
+
+  const savedAlbumTitles = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of albums) {
+      if (a.title) set.add(a.title.trim().toLowerCase());
+    }
+    return set;
+  }, [albums]);
+
+  const isAlbumSavedInGallery = (album: DiscoveredItem) => {
+    const normAlbumUrl = normalizeUrl(album.url);
+    if (normAlbumUrl && savedAlbumUrls.has(normAlbumUrl)) return true;
+    const normTitle = album.title ? album.title.trim().toLowerCase() : '';
+    if (normTitle && savedAlbumTitles.has(normTitle)) return true;
+    return false;
+  };
+
+  const mainAlbums = useMemo(() => {
+    return results.filter(a => a.source_type !== 'related');
+  }, [results]);
+
+  const recommendedAlbums = useMemo(() => {
+    return results.filter(a => a.source_type === 'related');
+  }, [results]);
+  const allAlbums = results;
+
+  const effectiveTab = (activeTab === 'main' && mainAlbums.length === 0 && recommendedAlbums.length > 0)
+    ? 'recommended'
+    : (activeTab === 'recommended' && recommendedAlbums.length === 0 && mainAlbums.length > 0)
+    ? 'main'
+    : activeTab;
+
+  const displayedAlbums = effectiveTab === 'main'
+    ? mainAlbums
+    : effectiveTab === 'recommended'
+    ? recommendedAlbums
+    : allAlbums;
+
+  const [visibleCount, setVisibleCount] = useState(36);
+
+  useEffect(() => {
+    setVisibleCount(36);
+  }, [activeTab]);
+
+  const visibleAlbums = useMemo(() => {
+    return displayedAlbums.slice(0, visibleCount);
+  }, [displayedAlbums, visibleCount]);
+
+  const displayedUrls = useMemo(() => displayedAlbums.map(a => a.url), [displayedAlbums]);
+  const isAllDisplayedSelected = displayedUrls.length > 0 && displayedUrls.every(url => selectedUrls.has(url));
+  const newDisplayedAlbums = useMemo(() => displayedAlbums.filter(a => !isAlbumSavedInGallery(a)), [displayedAlbums, isAlbumSavedInGallery]);
+
+  const handleSelectAll = () => {
+    if (isAllDisplayedSelected) {
+      const next = new Set(selectedUrls);
+      displayedUrls.forEach(url => next.delete(url));
+      setMultiAlbumState({ selectedUrls: Array.from(next) });
+    } else {
+      const next = new Set(selectedUrls);
+      displayedUrls.forEach(url => next.add(url));
+      setMultiAlbumState({ selectedUrls: Array.from(next) });
+    }
+  };
+
+  const handleSelectOnlyNew = () => {
+    const next = new Set(selectedUrls);
+    newDisplayedAlbums.forEach(a => next.add(a.url));
+    setMultiAlbumState({ selectedUrls: Array.from(next) });
+    soundEffects.click(settings.soundEnabled);
+  };
+
+  const clearSelection = () => {
+    setMultiAlbumState({ selectedUrls: [] });
+    setShowDownloadDropdown(false);
+  };
+
+  const totalSavedCount = results.filter(a => isAlbumSavedInGallery(a)).length;
+  const totalNewCount = results.length - totalSavedCount;
+
+  // Status helper for real-time card indicators with normalized URL matching
+  const getAlbumStatus = (albumUrl: string, albumTitle: string) => {
+    const normAlbumUrl = normalizeUrl(albumUrl);
+    const normTitle = albumTitle.trim().toLowerCase();
+
+    // 1. Saved in library?
+    const savedAlbum = albums.find(
+      (a) =>
+        (a.sourceUrl && normalizeUrl(a.sourceUrl) === normAlbumUrl) ||
+        (a.title && a.title.trim().toLowerCase() === normTitle)
+    );
+    if (savedAlbum) {
+      return {
+        status: 'saved' as const,
+        label: `${t.viewInGallery} (${savedAlbum.folder || t.folderPlaceholder})`,
+        color: 'emerald',
+        albumId: savedAlbum.id,
+        savedFolder: savedAlbum.folder || t.folderPlaceholder
+      };
+    }
+
+    // 2. Active or completed job?
+    const job = jobs.find((j) => j.url && normalizeUrl(j.url) === normAlbumUrl);
+    if (job) {
+      if (job.status === 'active') {
+        return {
+          status: 'extracting' as const,
+          label: `${t.extracting} (${job.progressPercent}%)`,
+          color: 'brand',
+          jobId: job.id
+        };
+      }
+      if (job.status === 'completed') {
+        const foundAlb = albums.find(a => a.id === job.resultAlbumId || (a.sourceUrl && normalizeUrl(a.sourceUrl) === normAlbumUrl));
+        return {
+          status: 'saved' as const,
+          label: `${t.viewInGallery} (${foundAlb?.folder || job.folder || t.folderPlaceholder})`,
+          color: 'emerald',
+          albumId: job.resultAlbumId || foundAlb?.id,
+          savedFolder: foundAlb?.folder || job.folder || t.folderPlaceholder
+        };
+      }
+      if (job.status === 'failed') {
+        return { status: 'error' as const, label: t.statusFailed || 'Falha', color: 'rose' };
+      }
+    }
+
+    // 3. Optimistically queued?
+    if (optimisticQueuedUrls.has(normAlbumUrl)) {
+      return { status: 'queued' as const, label: t.inQueue, color: 'brand' };
+    }
+
+    return null;
+  };
+
+  const effectiveFolder = destinationFolder.trim() || settings.defaultAlbumFolder || performerName.trim() || 'Geral';
+
+  // Direct actions
+  const executeSaveSingleDirect = async (album: DiscoveredItem, targetFolder: string) => {
+    const normUrl = normalizeUrl(album.url);
+    setOptimisticQueuedUrls((prev) => new Set(prev).add(normUrl));
+
+    try {
+      const res = await backendApi.batchSaveMultiAlbums([album], targetFolder);
+      if (res.success) {
+        markItemAsSavedOptimistically({
+          url: album.url,
+          title: album.title,
+          folder: targetFolder,
+          targetView: 'gallery'
+        });
+        setToast({
+          type: 'success',
+          message: t.albumSavedToast.replace('{title}', album.title.slice(0, 30)).replace('{folder}', targetFolder),
+          actionLabel: t.viewInGallery,
+          onAction: () => navigateToView('gallery'),
+        });
+        await syncJobs();
+        await syncAlbums();
+      } else {
+        setOptimisticQueuedUrls((prev) => {
+          const next = new Set(prev);
+          next.delete(normUrl);
+          return next;
+        });
+        setToast({ type: 'error', message: res.message });
+      }
+    } catch (err: any) {
+      setOptimisticQueuedUrls((prev) => {
+        const next = new Set(prev);
+        next.delete(normUrl);
+        return next;
+      });
+      setToast({ type: 'error', message: err.message || t.queueError });
+    }
+  };
+
+  const handleInitiateSingleSave = (album: DiscoveredItem) => {
+    if (settings.askFolderOnSave) {
+      setFolderModalState({
+        isOpen: true,
+        mode: 'single',
+        targetAlbum: album
+      });
+    } else {
+      executeSaveSingleDirect(album, effectiveFolder);
+    }
+  };
+
+  const handleDownloadSingleDirect = (album: DiscoveredItem) => {
+    setToast({
+      type: 'info',
+      message: t.startingSingleZip.replace('{title}', album.title.slice(0, 28)),
+    });
+    backendApi.triggerSingleAlbumZipDownload(album.url, album.title);
+  };
+
+  const executeBatchSaveToApp = async (targetFolder: string) => {
+    const selectedAlbums = results.filter((r) => selectedUrls.has(r.url));
+    if (selectedAlbums.length === 0) return;
+
+    // Set optimistic queued status for all selected
+    setOptimisticQueuedUrls((prev) => {
+      const next = new Set(prev);
+      selectedAlbums.forEach((a) => next.add(normalizeUrl(a.url)));
+      return next;
+    });
+
+    setIsSavingBatch(true);
+    try {
+      const res = await backendApi.batchSaveMultiAlbums(selectedAlbums, targetFolder);
+      if (res.success) {
+        selectedAlbums.forEach(a => {
+          markItemAsSavedOptimistically({
+            url: a.url,
+            title: a.title,
+            folder: targetFolder,
+            targetView: 'gallery'
+          });
+        });
+        setToast({
+          type: 'success',
+          message: t.batchSavedToast.replace('{count}', String(res.queued)).replace('{folder}', targetFolder),
+          actionLabel: t.viewInGallery,
+          onAction: () => navigateToView('gallery'),
+        });
+        clearSelection();
+        await syncJobs();
+        await syncAlbums();
+      } else {
+        setToast({ type: 'error', message: res.message });
+      }
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || t.batchSaveError });
+    } finally {
+      setIsSavingBatch(false);
+    }
+  };
+
+  const handleInitiateBatchSave = () => {
+    const selectedAlbums = results.filter((r) => selectedUrls.has(r.url));
+    if (selectedAlbums.length === 0) return;
+    if (settings.askFolderOnSave) {
+      setFolderModalState({
+        isOpen: true,
+        mode: 'batch'
+      });
+    } else {
+      executeBatchSaveToApp(effectiveFolder);
+    }
+  };
+
+  const handleBatchDownload = async (format: 'unified' | 'individual') => {
+    const selectedAlbums = results.filter((r) => selectedUrls.has(r.url));
+    if (selectedAlbums.length === 0) return;
+
+    setShowDownloadDropdown(false);
+
+    if (format === 'individual') {
+      setToast({
+        type: 'info',
+        message: t.startingMultiZip.replace('{count}', String(selectedAlbums.length)),
+      });
+      selectedAlbums.forEach((alb, idx) => {
+        setTimeout(() => {
+          backendApi.triggerSingleAlbumZipDownload(alb.url, alb.title);
+        }, idx * 600);
+      });
+      clearSelection();
+      return;
+    }
+
+    // Unified ZIP
+    setIsDownloadingBatch(true);
+    setToast({
+      type: 'info',
+      message: t.startingUnifiedZip.replace('{count}', String(selectedAlbums.length)),
+    });
+
+    try {
+      const res = await backendApi.batchDownloadMultiAlbumsZip(selectedAlbums, 'unified');
+      if (res.success) {
+        setToast({
+          type: 'success',
+          message: t.unifiedZipSuccess,
+        });
+        clearSelection();
+      } else {
+        setToast({
+          type: 'error',
+          message: res.error || t.unifiedZipError,
+        });
+      }
+    } catch (err: any) {
+      setToast({ type: 'error', message: err.message || t.zipGenError });
+    } finally {
+      setIsDownloadingBatch(false);
+    }
+  };
+
+  const getSourceBadge = (type: string) => {
+    switch (type) {
+      case 'primary':
+      case 'performer_page':
+        return <span className="px-2 py-0.5 text-[10px] rounded-full font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">{t.sourcePrimary || 'Principal'}</span>;
+      case 'related':
+        return <span className="px-2 py-0.5 text-[10px] rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">{t.sourceRelated}</span>;
+      case 'search':
+        return <span className="px-2 py-0.5 text-[10px] rounded-full font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">{t.sourceSearch}</span>;
+      default:
+        return <span className="px-2 py-0.5 text-[10px] rounded-full font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">{t.sourcePrimary || 'Principal'}</span>;
+    }
+  };
+
+  return (
+    <div className="p-3 sm:p-6 max-w-7xl mx-auto space-y-4 sm:space-y-6 min-w-0 max-w-full pb-8">
+      {/* Hero Header Card */}
+      <div className="p-6 rounded-3xl glass-panel-elevated border border-border flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-brand-500/20 text-brand-300 border border-brand-500/40 shrink-0">
+              {t.badgeTag}
+            </span>
+            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              {t.badgeMode}
+            </span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-100 flex items-center gap-2.5 tracking-tight">
+            <IconBadge icon={<Compass size={20} />} variant="sapphire" size="md" />
+            {t.title}
+          </h1>
+          <p className="text-xs text-slate-400 max-w-3xl leading-relaxed">
+            {t.subtitle}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          {results.length > 0 && (
+            <button
+              onClick={() => {
+                clearMultiAlbumState();
+                soundEffects.click(settings.soundEnabled);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-surface-elevated hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 border border-border hover:border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+              title={t.clearTitle}
+            >
+              <RotateCcw size={14} />
+              <span>{t.clearBtn}</span>
+            </button>
+          )}
+          <button
+            onClick={() => navigateToView('job-history')}
+            className="px-3.5 py-2 rounded-xl bg-surface-elevated hover:bg-surface-hover border border-border text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+            title={t.taskMgmtTitle}
+          >
+            <Layers size={14} className="text-brand-400" />
+            <span>{t.taskMgmt}</span>
+          </button>
+          <button
+            onClick={() => navigateToView('gallery')}
+            className="px-3.5 py-2 rounded-xl bg-brand-600/20 hover:bg-brand-600/30 border border-brand-500/40 text-brand-300 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+            title={t.albumGalleryTitle}
+          >
+            <FolderHeart size={14} />
+            <span>{t.albumGallery}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Form Card */}
+      <div className="glass-panel p-6 rounded-3xl border border-border space-y-6">
+        <form onSubmit={handleDiscover} className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            {/* Target URL */}
+            <div className="lg:col-span-6 space-y-1.5">
+              <div className="h-5 flex items-center">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block truncate">
+                  {t.urlLabel}
+                </label>
+              </div>
+              <div className="relative">
+                <input
+                  type="url"
+                  required
+                  placeholder={t.urlPlaceholder}
+                  value={url}
+                  onChange={(e) => setMultiAlbumState({ url: e.target.value })}
+                  className="w-full h-12 px-4 rounded-2xl bg-surface-elevated border border-border text-slate-100 placeholder-slate-500 text-xs sm:text-sm font-medium outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all shadow-inner"
+                />
+              </div>
+            </div>
+
+            {/* Artist Name */}
+            <div className="lg:col-span-3 space-y-1.5">
+              <div className="h-5 flex items-center">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block truncate">
+                  {t.performerLabel}
+                </label>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder={t.performerPlaceholder}
+                  value={performerName}
+                  onChange={(e) => setMultiAlbumState({ performerName: e.target.value })}
+                  className="w-full h-12 px-4 rounded-2xl bg-surface-elevated border border-border text-slate-100 placeholder-slate-500 text-xs sm:text-sm font-medium outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all shadow-inner"
+                />
+              </div>
+            </div>
+
+            {/* Limit (Optional) */}
+            <div className="lg:col-span-3 space-y-1.5">
+              <div className="h-5 flex items-center">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block truncate whitespace-nowrap" title={t.limitTitle || t.qtyTitle}>
+                  {t.limitLabel || t.qtyLabel}
+                </label>
+              </div>
+              <input
+                type="number"
+                min="0"
+                max="5000"
+                placeholder={t.limitPlaceholder || t.qtyPlaceholder}
+                value={maxRelated === 0 ? '' : maxRelated}
+                onChange={(e) => setMultiAlbumState({ maxRelated: e.target.value === '' ? 0 : Number(e.target.value) })}
+                className="w-full h-12 px-4 rounded-2xl bg-surface-elevated border border-border text-slate-100 placeholder-slate-500 text-xs sm:text-sm font-medium outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all shadow-inner"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <div className="text-xs text-slate-500 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-brand-400" />
+              <span>{t.realtimeStreamHint}</span>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="h-12 px-6 rounded-2xl text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-glow-brand transition-all disabled:opacity-50 bg-gradient-to-r from-brand-600 to-accent-purple hover:from-brand-500 hover:to-accent-purple"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>{maxRelated === 0 ? t.autoScrollScanning : t.discoveringBtn}</span>
+                </>
+              ) : (
+                <>
+                  <Search className="w-4 h-4" />
+                  <span>{t.discoverBtn}</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Error alert */}
+      {error && (
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm glass-panel">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-400" />
+          <p>{error}</p>
+        </div>
+      )}
+
+      {/* Results Header with Live Counter and Action Buttons */}
+      {(results.length > 0 || loading) && (
+        <div className="space-y-4">
+          {/* Destination Folder & Actions Toolbar (Unified Style Matching WebVideoScraperView) */}
+          <div className="glass-panel p-4 sm:p-5 rounded-3xl border border-border space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              {/* Folder Destination & Selector */}
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs font-semibold text-slate-400">
+                  {t.saveFolder || 'Salvar na Pasta:'}
+                </span>
+                <div className="relative flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={destinationFolder}
+                    onChange={(e) => setDestinationFolder(e.target.value)}
+                    placeholder={performerName.trim() || t.folderPlaceholder || 'Geral'}
+                    className="bg-surface-elevated border border-border focus:border-brand-500 text-slate-100 text-xs font-bold rounded-xl px-3 py-1.5 outline-none w-48"
+                  />
+                  {/* Folder Select Dropdown Helper */}
+                  {albumFolders.length > 0 && (
+                    <select
+                      onChange={(e) => e.target.value && setDestinationFolder(e.target.value)}
+                      value=""
+                      className="bg-surface-elevated border border-border text-slate-300 text-xs rounded-xl px-2 py-1.5 outline-none cursor-pointer"
+                      title={t.chooseExistingFolder || 'Escolher pasta existente na Galeria'}
+                    >
+                      <option value="" disabled>{t.existingFolders || 'Pastas Existentes'}</option>
+                      {albumFolders.map((f) => (
+                        <option key={f.id || f.name} value={f.name}>{f.name} ({f.count ?? 0})</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {lastSearchedPerformer && (
+                  <span className="text-[11px] text-slate-400 truncate max-w-xs font-medium">
+                    {t.forPerformer} "{lastSearchedPerformer}"
+                  </span>
+                )}
+              </div>
+
+              {/* Selection & Batch Actions */}
+              <div className="flex flex-wrap items-center gap-2">
+                {newDisplayedAlbums.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleSelectOnlyNew}
+                    className="px-2.5 py-1.5 rounded-xl bg-surface-elevated hover:bg-surface-hover text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                    title={t.selectNewTitle}
+                  >
+                    <CheckCircle2 size={13} className="text-emerald-400" />
+                    <span>{t.selectNew} ({newDisplayedAlbums.length})</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleSelectAll}
+                  className="px-2.5 py-1.5 rounded-xl bg-surface-elevated hover:bg-surface-hover text-slate-200 border border-border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  {isAllDisplayedSelected ? (
+                    <>
+                      <CheckSquare size={13} className="text-brand-400" />
+                      <span>{t.deselectAll} ({displayedAlbums.length})</span>
+                    </>
+                  ) : (
+                    <>
+                      <Square size={13} />
+                      <span>{t.selectAll} ({displayedAlbums.length})</span>
+                    </>
+                  )}
+                </button>
+
+                <span className="text-xs font-mono font-bold text-indigo-300 px-2.5 py-1 rounded bg-indigo-950/60 border border-indigo-500/30">
+                  {selectedUrls.size} {t.selected}
+                </span>
+
+                {/* Save Selected To App */}
+                <button
+                  type="button"
+                  onClick={handleInitiateBatchSave}
+                  disabled={selectedUrls.size === 0 || isSavingBatch || isDownloadingBatch}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-2 shadow-md shadow-emerald-600/30 disabled:opacity-50 transition-all cursor-pointer"
+                  title={t.saveToAppTooltip}
+                >
+                  {isSavingBatch ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      <span>{t.extracting || 'Salvando...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <FolderHeart size={13} />
+                      <span>{t.saveToApp} ({selectedUrls.size})</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Download Dropdown */}
+                {selectedUrls.size === 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const alb = results.find((r) => selectedUrls.has(r.url));
+                      if (alb) handleDownloadSingleDirect(alb);
+                    }}
+                    disabled={isSavingBatch || isDownloadingBatch}
+                    className="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs shadow-md transition-all disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                    title={t.downloadZipTooltip}
+                  >
+                    <Download size={13} />
+                    <span>{t.downloadZip}</span>
+                  </button>
+                ) : (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowDownloadDropdown(!showDownloadDropdown)}
+                      disabled={selectedUrls.size === 0 || isSavingBatch || isDownloadingBatch}
+                      className="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs shadow-md transition-all disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                      title={t.downloadFormatTooltip}
+                    >
+                      {isDownloadingBatch ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <Download size={13} />
+                      )}
+                      <span>{t.downloadSelected} ({selectedUrls.size})</span>
+                      <ChevronDown size={13} className="ml-0.5" />
+                    </button>
+
+                    {showDownloadDropdown && (
+                      <div className="absolute right-0 top-full mt-2 w-60 rounded-2xl bg-slate-900 border border-border shadow-2xl p-1.5 z-50 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => handleBatchDownload('unified')}
+                          className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-brand-500/20 text-slate-200 hover:text-white flex items-center gap-2 transition-all font-medium cursor-pointer"
+                        >
+                          <FolderDown className="w-4 h-4 text-brand-400 shrink-0" />
+                          <div>
+                            <div className="font-bold">{t.unifiedZip}</div>
+                            <div className="text-[10px] text-slate-400">{t.unifiedZipDesc}</div>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleBatchDownload('individual')}
+                          className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-brand-500/20 text-slate-200 hover:text-white flex items-center gap-2 transition-all font-medium cursor-pointer"
+                        >
+                          <Download className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <div>
+                            <div className="font-bold">{t.multipleZip}</div>
+                            <div className="text-[10px] text-slate-400">{t.multipleZipDesc}</div>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearMultiAlbumState();
+                    soundEffects.click(settings.soundEnabled);
+                  }}
+                  className="p-2 rounded-xl bg-surface border border-border hover:border-rose-500/40 text-slate-400 hover:text-rose-300 text-xs transition-all cursor-pointer"
+                  title={t.clearTitle}
+                >
+                  <RotateCcw size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Segmented Section Filter Tabs */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-border/40">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Tab: Álbuns Principais */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('main');
+                    soundEffects.click(settings.soundEnabled);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer ${
+                    effectiveTab === 'main'
+                      ? 'bg-gradient-to-r from-brand-600 to-indigo-600 text-white shadow-brand-600/30 ring-1 ring-brand-400/40'
+                      : 'bg-surface-elevated hover:bg-surface-hover text-slate-300 border border-border'
+                  }`}
+                >
+                  <Compass size={13} className={effectiveTab === 'main' ? 'text-white' : 'text-brand-400'} />
+                  <span>{t.mainAlbums || 'Álbuns Principais'} ({mainAlbums.length})</span>
+                </button>
+
+                {/* Tab: Relacionados / Recomendados */}
+                {recommendedAlbums.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('recommended');
+                      soundEffects.click(settings.soundEnabled);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer ${
+                      effectiveTab === 'recommended'
+                        ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-amber-600/30 ring-1 ring-amber-400/40'
+                        : 'bg-surface-elevated hover:bg-surface-hover text-slate-300 border border-border'
+                    }`}
+                  >
+                    <Sparkles size={13} className={effectiveTab === 'recommended' ? 'text-white' : 'text-amber-400'} />
+                    <span>{t.recommendedAlbums || 'Relacionados / Recomendados'} ({recommendedAlbums.length})</span>
+                  </button>
+                )}
+
+                {/* Tab: Todos */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('all');
+                    soundEffects.click(settings.soundEnabled);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer ${
+                    effectiveTab === 'all'
+                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-purple-600/30 ring-1 ring-purple-400/40'
+                      : 'bg-surface-elevated hover:bg-surface-hover text-slate-300 border border-border'
+                  }`}
+                >
+                  <Layers size={13} className={effectiveTab === 'all' ? 'text-white' : 'text-purple-400'} />
+                  <span>{t.allAlbums || 'Todos'} ({results.length})</span>
+                </button>
+              </div>
+
+              {/* Status Badges */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-mono font-bold text-slate-300 px-2 py-0.5 rounded bg-surface border border-border">
+                  {t.totalCount}: {results.length}
+                </span>
+                <span className="text-xs font-mono font-bold text-emerald-400 px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-500/30">
+                  {t.savedCount}: {totalSavedCount}
+                </span>
+                <span className="text-xs font-mono font-bold text-cyan-400 px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/30">
+                  {t.newCount}: {totalNewCount}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Album Grid or Empty State */}
+          {displayedAlbums.length === 0 ? (
+            <div className="glass-panel p-10 rounded-3xl border border-border text-center space-y-3">
+              <IconBadge
+                icon={activeTab === 'recommended' ? <Sparkles size={22} /> : <Compass size={22} />}
+                variant={activeTab === 'recommended' ? 'gold' : 'sapphire'}
+                size="lg"
+                className="mx-auto"
+              />
+              <p className="text-sm font-semibold text-slate-300">
+                {activeTab === 'recommended' ? t.noRecommendedFound : t.noMainFound}
+              </p>
+              <p className="text-xs text-slate-500">
+                {t.switchToAllHint}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {visibleAlbums.map((album) => {
+                const isSelected = selectedUrls.has(album.url);
+                const statusInfo = getAlbumStatus(album.url, album.title);
+
+                return (
+                  <div
+                    key={album.url}
+                    className={`bg-surface-elevated border rounded-2xl p-4 flex flex-col justify-between transition-all group shadow-md relative ${
+                      isSelected
+                        ? 'border-brand-500 bg-brand-950/20 shadow-glow-brand ring-1 ring-brand-500/30'
+                        : 'border-border hover:border-brand-500/40'
+                    }`}
+                  >
+                  <div className="space-y-3">
+                    {/* Thumbnail Preview */}
+                    <div className="aspect-video w-full rounded-xl overflow-hidden bg-slate-950/80 flex items-center justify-center border border-border relative group/thumb">
+                      {/* Checkbox Overlay */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelect(album.url);
+                        }}
+                        className={`absolute top-2 left-2 z-20 p-1.5 rounded-lg backdrop-blur-md transition-all border ${
+                          isSelected
+                            ? 'bg-brand-600 text-white border-brand-400 shadow-md'
+                            : 'bg-black/60 text-white/70 hover:text-white hover:bg-black/90 border-white/20 opacity-80 group-hover:opacity-100'
+                        }`}
+                        title={isSelected ? t.deselectAlbumTooltip : t.selectAlbumTooltip}
+                      >
+                        {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                      </button>
+
+                      {album.thumbnail_url ? (
+                        <>
+                          <img
+                            src={`/api/proxy-image?url=${encodeURIComponent(album.thumbnail_url)}`}
+                            alt={album.title}
+                            className="w-full h-full object-contain cursor-pointer transition-transform duration-300"
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            onClick={() => setPreviewImage(album.thumbnail_url || null)}
+                            title={t.expandThumbTooltip}
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPreviewImage(album.thumbnail_url || null);
+                            }}
+                            className="absolute bottom-2 right-2 p-1.5 rounded-lg bg-black/70 text-white/80 hover:text-white hover:bg-black/95 opacity-0 group-hover/thumb:opacity-100 transition-opacity backdrop-blur-sm border border-white/10"
+                            title={t.viewRealSizeTooltip}
+                          >
+                            <Maximize2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-slate-600 gap-1">
+                          <FolderHeart className="w-8 h-8 opacity-40" />
+                          <span className="text-[10px] font-bold">{t.noThumbnail}</span>
+                        </div>
+                      )}
+
+                      <div className="absolute top-2 right-2 pointer-events-none">
+                        {getSourceBadge(album.source_type)}
+                      </div>
+                    </div>
+
+                    {/* Title and Status */}
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="font-bold text-slate-100 text-sm line-clamp-2 title-tooltip flex-1" title={album.title}>
+                          {album.title}
+                        </h3>
+                        {statusInfo && (
+                          statusInfo.status === 'saved' ? (
+                            <SavedRedirectBadge
+                              savedInfo={{
+                                isSaved: true,
+                                savedFolder: statusInfo.savedFolder || t.folderPlaceholder,
+                                targetId: statusInfo.albumId,
+                                targetView: 'gallery'
+                              }}
+                            />
+                          ) : (
+                            <span
+                              className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                statusInfo.color === 'emerald'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                  : statusInfo.color === 'brand'
+                                  ? 'bg-brand-500/20 text-brand-300 border-brand-500/30 animate-pulse'
+                                  : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                              }`}
+                            >
+                              {statusInfo.status === 'extracting' && <Loader2 className="w-3 h-3 animate-spin text-brand-400" />}
+                              {statusInfo.status === 'queued' && <Clock className="w-3 h-3 text-brand-400" />}
+                              <span>{statusInfo.label}</span>
+                            </span>
+                          )
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 font-mono truncate mt-1" title={album.url}>
+                        {album.url}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Actions Toolbar */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-4 pt-3 border-t border-border">
+                    {/* Botão Dinâmico: Se Salvo -> "Ver na Galeria", Se Extraindo -> "Extraindo...", Se Normal -> "Salvar no App" */}
+                    {statusInfo?.status === 'saved' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (statusInfo.albumId) {
+                            navigateToView('album-detail', statusInfo.albumId);
+                          } else {
+                            navigateToView('gallery');
+                          }
+                        }}
+                        className="flex-1 min-w-[110px] flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold transition-all shadow-glow-emerald"
+                        title={t.openInGalleryTooltip}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>{t.viewInGallery}</span>
+                      </button>
+                    ) : statusInfo?.status === 'extracting' || statusInfo?.status === 'queued' ? (
+                      <div className="flex-1 min-w-[110px] flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[11px] font-bold">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-400" />
+                        <span>{statusInfo.status === 'queued' ? t.inQueue : t.extracting}</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleInitiateSingleSave(album)}
+                        className="flex-1 min-w-[100px] flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-[11px] font-bold transition-all"
+                        title={t.saveToAppTooltip}
+                      >
+                        <FolderHeart className="w-3.5 h-3.5" />
+                        <span>{t.saveToApp}</span>
+                      </button>
+                    )}
+
+                    {/* Baixar ZIP Direto */}
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadSingleDirect(album)}
+                      className="flex-1 min-w-[90px] flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/20 text-[11px] font-bold transition-all"
+                      title={t.downloadZipTooltip}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>{t.downloadZip}</span>
+                    </button>
+
+                    {/* Extrair com o Agente (Aba Extrator) */}
+                    <button
+                      type="button"
+                      onClick={() => handleExtractSingle(album.url)}
+                      className="p-1.5 rounded-xl bg-surface border border-border hover:bg-surface-elevated hover:text-brand-400 text-slate-400 transition-colors"
+                      title={t.openManualExtractor}
+                    >
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Link Original */}
+                    <a
+                      href={album.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-1.5 rounded-xl bg-surface border border-border hover:bg-surface-elevated hover:text-brand-400 text-slate-400 transition-colors"
+                      title={t.openOriginalLink}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+              {displayedAlbums.length > visibleCount && (
+                <div className="flex items-center justify-center pt-6">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount((prev) => prev + 36)}
+                    className="px-6 py-3 rounded-2xl bg-surface-elevated hover:bg-surface-hover border border-border text-slate-200 text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                  >
+                    <Sparkles size={14} className="text-brand-400" />
+                    <span>
+                      {settings.language === 'en-US'
+                        ? `Show More Albums (${displayedAlbums.length - visibleCount} remaining)`
+                        : `Carregar Mais Álbuns (restam ${displayedAlbums.length - visibleCount})`}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed top-6 right-6 z-50 animate-in fade-in slide-in-from-top-3 duration-200">
+          <div
+            className={`px-4 py-3 rounded-2xl border shadow-2xl backdrop-blur-xl flex items-center gap-3 text-xs sm:text-sm font-semibold ${
+              toast.type === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-200'
+                : toast.type === 'error'
+                ? 'bg-rose-950/90 border-rose-500/40 text-rose-200'
+                : 'bg-brand-950/90 border-brand-500/40 text-brand-200'
+            }`}
+          >
+            {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+            {toast.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+            {toast.type === 'info' && <Sparkles className="w-4 h-4 text-brand-400 shrink-0" />}
+            <span>{toast.message}</span>
+            {toast.actionLabel && toast.onAction && (
+              <button
+                type="button"
+                onClick={toast.onAction}
+                className="ml-2 px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition-all underline"
+              >
+                {toast.actionLabel}
+              </button>
+            )}
+            <button type="button" onClick={() => setToast(null)} className="ml-2 hover:opacity-75">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox Modal para visualizar miniatura sem cortes */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[92vh] bg-surface-elevated border border-border rounded-2xl overflow-hidden p-3 shadow-2xl flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setPreviewImage(null)}
+              className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/70 text-white/90 hover:bg-black/95 transition-all border border-white/20 shadow-lg"
+              title={t.closeLightbox}
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <img
+              src={`/api/proxy-image?url=${encodeURIComponent(previewImage)}`}
+              alt={t.previewImageAlt || 'Preview'}
+              className="max-h-[85vh] w-auto max-w-full rounded-xl object-contain shadow-inner"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Folder Select Modal for MultiAlbumView */}
+      <FolderSelectModal
+        isOpen={folderModalState.isOpen}
+        onClose={() => setFolderModalState({ isOpen: false, mode: 'single' })}
+        title={folderModalState.mode === 'batch' 
+          ? t.folderModalBatchTitle.replace('{count}', String(selectedUrls.size))
+          : t.folderModalSingleTitle}
+        subtitle={t.folderModalSubtitle}
+        existingFolders={albumFolders.map(f => f.name)}
+        defaultFolder={destinationFolder.trim() || settings.defaultAlbumFolder || performerName.trim() || (t.folderPlaceholder || 'General')}
+        type="album"
+        onConfirm={(selectedFolder: string) => {
+          setDestinationFolder(selectedFolder);
+          if (folderModalState.mode === 'batch') {
+            executeBatchSaveToApp(selectedFolder);
+          } else if (folderModalState.targetAlbum) {
+            executeSaveSingleDirect(folderModalState.targetAlbum, selectedFolder);
+          }
+        }}
+      />
+    </div>
+  );
+};
