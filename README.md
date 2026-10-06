@@ -1,4 +1,4 @@
-# ⚡ IMAGEX.AI v4.2
+# ⚡ IMAGEX.AI v5.0
 
 Autonomous platform for intelligent extraction, organization, and inspection of web albums and videos in their original maximum resolution. 🚀✨
 
@@ -39,7 +39,7 @@ python -m src.main "https://example.com/gallery" --headed
 ---
 
 #### 4. Portable Executable (No Python Required) 📦
-1. Download `IMAGEX.AI-v4.2-Windows.zip` from the GitHub **Releases** tab.
+1. Download `IMAGEX.AI-v5.0-Windows.zip` from the GitHub **Releases** tab.
 2. Extract the archive anywhere on Windows.
 3. Double-click `main.exe` to run.
 
@@ -125,7 +125,7 @@ python -m src.main "https://exemplo.com/galeria" --headed
 ---
 
 #### 4. Executável Portátil (Sem precisar de Python) 📦
-1. Baixe o arquivo `IMAGEX.AI-v4.2-Windows.zip` na aba de **Releases** do GitHub.
+1. Baixe o arquivo `IMAGEX.AI-v5.0-Windows.zip` na aba de **Releases** do GitHub.
 2. Extraia a pasta em qualquer lugar do Windows.
 3. Dê dois cliques em `main.exe` para rodar.
 

@@ -892,7 +892,7 @@ async def health_check():
     """System health check and version information."""
     return {
         "status": "ok",
-        "version": "4.2.8-1080p-instant-return",
+        "version": "5.0.0",
         "timestamp": time.time()
     }
 
