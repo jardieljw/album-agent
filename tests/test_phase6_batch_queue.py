@@ -124,3 +124,5 @@ async def test_batch_analyze_endpoint_payload_validation():
             # Cleanup
             _active_jobs.pop(s_id, None)
             _job_controllers.pop(s_id, None)
+        from src.server.server import _save_jobs_to_disk
+        _save_jobs_to_disk()

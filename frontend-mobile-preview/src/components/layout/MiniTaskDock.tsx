@@ -134,7 +134,10 @@ export const MiniTaskDock: React.FC = () => {
     return (
       <>
         {/* MOBILE: Circular floating button only (< 768px) */}
-        <div className="md:hidden fixed bottom-20 right-3.5 z-40 animate-fade-in">
+        <div
+          className="md:hidden fixed right-3.5 z-40 animate-fade-in"
+          style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))' }}
+        >
           <button
             onClick={() => setDockMinimized(false)}
             className="w-11 h-11 rounded-full bg-brand-600/95 hover:bg-brand-500 text-white shadow-2xl border-2 border-brand-400/50 flex items-center justify-center relative backdrop-blur-xl active:scale-90 transition-all"
@@ -200,7 +203,10 @@ export const MiniTaskDock: React.FC = () => {
 
   // 2. Expanded View: Sleek Modern Tabbed Dock
   return (
-    <div className="fixed bottom-20 md:bottom-4 left-3 right-3 md:left-68 md:right-4 z-40 animate-fade-in">
+    <div
+      className="fixed left-3 right-3 md:left-68 md:right-4 md:bottom-4 z-40 animate-fade-in"
+      style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))' }}
+    >
       <div className="glass-panel-elevated rounded-2xl p-2.5 sm:p-3 sm:px-4 flex flex-col gap-2 border border-brand-500/30 shadow-2xl bg-surface/95 backdrop-blur-xl">
         {/* Horizontal tabs/pills switcher bar */}
         {dockJobs.length > 0 && (
@@ -364,7 +370,7 @@ export const MiniTaskDock: React.FC = () => {
           </div>
 
           {/* Right: Action Buttons */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {/* Primary Action Button (Completed) */}
             {isCompleted && (
               isVideo ? (
@@ -373,7 +379,7 @@ export const MiniTaskDock: React.FC = () => {
                     navigateToView('videos');
                     setDockMinimized(true);
                   }}
-                  className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-sm whitespace-nowrap"
+                  className="px-2 sm:px-3.5 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-sm whitespace-nowrap"
                 >
                   <Film size={12} className="shrink-0" />
                   <span>{t.viewVideo}</span>
@@ -388,7 +394,7 @@ export const MiniTaskDock: React.FC = () => {
                     }
                     setDockMinimized(true);
                   }}
-                  className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-glow-brand whitespace-nowrap"
+                  className="px-2 sm:px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-glow-brand whitespace-nowrap"
                 >
                   <ExternalLink size={12} className="shrink-0" />
                   <span>{t.viewAlbum}</span>
@@ -405,7 +411,7 @@ export const MiniTaskDock: React.FC = () => {
                     setSelectedJobId(null);
                   }
                 }}
-                className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-glow-brand whitespace-nowrap"
+                className="px-2 sm:px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-glow-brand whitespace-nowrap"
                 title="Tentar Novamente"
               >
                 <RotateCcw size={12} className="shrink-0" />
@@ -423,7 +429,7 @@ export const MiniTaskDock: React.FC = () => {
                     navigateToView('live-monitor');
                   }
                 }}
-                className="px-2.5 sm:px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-glow-brand whitespace-nowrap"
+                className="px-2 sm:px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-[11px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 transition-colors shadow-glow-brand whitespace-nowrap"
               >
                 <ExternalLink size={12} className="shrink-0" />
                 <span>{isVideo ? t.viewTasks : t.viewLive}</span>
@@ -434,11 +440,11 @@ export const MiniTaskDock: React.FC = () => {
             {isActive && !isPaused && (
               <button
                 onClick={() => pauseJob(focusedJob.id)}
-                className="px-2 sm:px-2.5 py-1 rounded-lg bg-amber-600/20 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30 text-[10px] sm:text-[11px] font-semibold transition-colors whitespace-nowrap flex items-center gap-1"
+                className="px-1.5 sm:px-2.5 py-1.5 rounded-lg bg-amber-600/20 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30 text-[10px] sm:text-[11px] font-semibold transition-colors whitespace-nowrap flex items-center gap-1"
                 title={t.pause}
               >
                 <Pause size={11} />
-                <span>{t.pause}</span>
+                <span className="hidden xs:inline">{t.pause}</span>
               </button>
             )}
 
@@ -446,11 +452,11 @@ export const MiniTaskDock: React.FC = () => {
             {isPaused && (
               <button
                 onClick={() => resumeJob(focusedJob.id)}
-                className="px-2 sm:px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 text-[10px] sm:text-[11px] font-semibold transition-colors whitespace-nowrap flex items-center gap-1"
+                className="px-1.5 sm:px-2.5 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 text-[10px] sm:text-[11px] font-semibold transition-colors whitespace-nowrap flex items-center gap-1"
                 title={t.resume}
               >
                 <Play size={11} />
-                <span>{t.resume}</span>
+                <span className="hidden xs:inline">{t.resume}</span>
               </button>
             )}
 
@@ -463,7 +469,7 @@ export const MiniTaskDock: React.FC = () => {
                     setSelectedJobId(null);
                   }
                 }}
-                className="px-2 sm:px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 text-[10px] sm:text-[11px] font-semibold transition-colors whitespace-nowrap"
+                className="px-1.5 sm:px-2.5 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 text-[10px] sm:text-[11px] font-semibold transition-colors whitespace-nowrap"
                 title={isQueued ? t.removeFromQueue : t.cancelTask}
               >
                 {t.cancel}
@@ -473,7 +479,7 @@ export const MiniTaskDock: React.FC = () => {
             {/* Minimize toggle */}
             <button
               onClick={() => setDockMinimized(true)}
-              className="p-1.5 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-surface-elevated transition-colors"
+              className="p-1 sm:p-1.5 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-surface-elevated transition-colors"
               title={t.minimizeDock}
             >
               <ChevronDown size={14} />
