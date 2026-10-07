@@ -1130,12 +1130,9 @@ export const GalleryView: React.FC = () => {
                   )}
                 </div>
 
-                <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between text-white text-xs">
-                  <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 font-semibold">
+                <div className="absolute bottom-2.5 left-2.5 flex items-center text-white text-xs">
+                  <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 font-semibold px-2 py-0.5 rounded bg-black/60 backdrop-blur-md border border-white/10">
                     {album.totalSizeBytes > 0 ? formatFileSize(album.totalSizeBytes) : 'Tam. N/D'}
-                  </span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-brand-500/30 text-brand-300 font-mono font-bold border border-brand-500/40">
-                    {album.aiModel}
                   </span>
                 </div>
               </div>
