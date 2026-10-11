@@ -320,7 +320,7 @@ class SemanticAgentBrain:
                         await on_event({
                             "type": "ai_thought",
                             "stage": "SPECULATIVE_PROBING",
-                            "thought": f"Testando estratégia '{action_name}' no candidato #{position} (score: {score:.2f})",
+                            "thought": f"Testing strategy '{action_name}' on candidate #{position} (score: {score:.2f})",
                         })
 
                     telemetry.browser_actions_count += 1
@@ -358,7 +358,7 @@ class SemanticAgentBrain:
                     await on_event({
                         "type": "ai_thought",
                         "stage": "ORIGINAL_RESOLVED",
-                        "thought": f"Imagem #{position} confirmada em alta resolução: {validation_res.width}x{validation_res.height} ({validation_res.format.upper() if validation_res.format else 'JPG'}) via {method.value}",
+                        "thought": f"Image #{position} confirmed in high resolution: {validation_res.width}x{validation_res.height} ({validation_res.format.upper() if validation_res.format else 'JPG'}) via {method.value}",
                     })
 
                 is_anim = cand.is_animated or (validation_res.format == "gif")
@@ -394,7 +394,7 @@ class SemanticAgentBrain:
                     await on_event({
                         "type": "ai_thought",
                         "stage": "NOISE_FILTER",
-                        "thought": f"Candidato #{position} filtrado: {audit.failure_reason}",
+                        "thought": f"Candidate #{position} filtered: {audit.failure_reason}",
                     })
 
                 current_img = AlbumImage(

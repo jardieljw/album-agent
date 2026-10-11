@@ -196,7 +196,7 @@ class KnowledgeStore:
         os.makedirs(self.storage_dir, exist_ok=True)
         b64_path = self._get_b64_file_path(domain)
         try:
-            data = knowledge.model_dump()
+            data = knowledge.model_dump() if hasattr(knowledge, "model_dump") else knowledge.dict()
             b64_text = self.encode_content(data)
             tmp_path = b64_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -438,7 +438,7 @@ class KnowledgeStore:
             "safety_verdict": audit["verdict"],
             "safety_warnings": audit["warnings"],
             "pr_recommendation": audit["recommendation"],
-            "model_data": knowledge.model_dump(),
+            "model_data": knowledge.model_dump() if hasattr(knowledge, "model_dump") else knowledge.dict(),
         }
 
     def inspect_knowledge(self, target: Optional[str]) -> Optional[Dict[str, Any]]:

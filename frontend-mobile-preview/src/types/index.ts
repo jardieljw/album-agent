@@ -9,7 +9,6 @@ export type ViewId =
   | 'multi-album'
   | 'batch-queue'
   | 'live-monitor'
-  | 'teaching'
   | 'gallery'
   | 'videos'
   | 'trash'
@@ -94,6 +93,7 @@ export interface ImageItem {
   posterUrl?: string;
   durationSeconds?: number;
   candidateId?: string; // Video candidate id for individual stream refresh
+  isFavorite?: boolean;
 }
 
 export type MediaExtractFilter = 'all' | 'images' | 'videos' | 'gifs';
@@ -107,6 +107,7 @@ export interface Album {
   createdAt: string;
   updatedAt: string;
   imageCount: number;
+  totalImages?: number;
   resolvedOriginalCount: number;
   totalSizeBytes: number;
   coverImage: string;
@@ -124,6 +125,16 @@ export interface Album {
   sourceOrigin?: 'local' | 'remote';
   sourcePage?: string;
   folder?: string;
+  syncStats?: {
+    total_images?: number;
+    updated_dimensions?: number;
+    updated_sizes?: number;
+    repaired_links?: number;
+    palettes_generated?: number;
+    failed_count?: number;
+    failed_details?: string[];
+  };
+  syncMessage?: string;
 }
 
 export interface ExtractionJob {
@@ -199,6 +210,38 @@ export interface DomainPattern {
   updatedAt?: string;
 }
 
+export interface ChatMediaItem {
+  type: 'image' | 'video' | 'album';
+  id?: string;
+  title?: string;
+  thumbnail_url?: string;
+  original_url?: string;
+  preview_url?: string;
+  stream_url?: string;
+  folder?: string;
+  item_count?: number;
+  album_id?: string;
+  duration?: number;
+}
+
+export interface ChatExecutedTool {
+  name: string;
+  args: Record<string, any>;
+  result: Record<string, any>;
+  summary: string;
+}
+
+export interface ChatClientAction {
+  type: 'navigate' | 'filter' | 'preview';
+  view?: string;
+  target_id?: string;
+  filter_type?: string;
+  value?: string;
+  media_type?: string;
+  url?: string;
+  title?: string;
+}
+
 export interface ChatMessage {
   id: string;
   sender: 'user' | 'agent';
@@ -213,7 +256,12 @@ export interface ChatMessage {
   model?: string;
   errorType?: string;
   canFallback?: boolean;
+  mediaItems?: ChatMediaItem[];
+  executedTools?: ChatExecutedTool[];
+  thoughtChain?: string[];
+  clientAction?: ChatClientAction;
 }
+
 
 export interface OllamaHealthStatus {
   isAvailable: boolean;
@@ -258,6 +306,18 @@ export interface KeybindingMap {
   [action: string]: string; // e.g. "openCommandPalette": "ctrl+k", "toggleFullscreen": "f"
 }
 
+export type LightboxOpenAnimation = 'expand' | 'elastic' | 'zoom' | 'switch' | 'fade' | 'none';
+export type ImageSwitchAnimation = 'switch' | 'fade' | 'slide' | 'zoom' | 'elastic' | 'none';
+export type SlideshowAnimation = 'switch' | 'fade' | 'slide' | 'zoom' | 'none';
+export type FullscreenAnimation = 'elastic' | 'smooth' | 'instant' | 'none';
+export type AnimationSpeed = 'ultra-fast' | 'fast' | 'normal' | 'slow';
+export type AnimationDistance = 'subtle' | 'normal' | 'large';
+export type ViewTransitionAnimation = 'fade' | 'slide' | 'zoom' | 'none';
+export type ModalAnimation = 'scale' | 'slide-up' | 'fade' | 'none';
+export type DrawerAnimation = 'slide' | 'fade' | 'none';
+export type TaskDockAnimation = 'slide-up' | 'bounce' | 'fade' | 'none';
+export type VideoPlayerAnimation = 'zoom' | 'fade' | 'slide-up' | 'none';
+
 export interface AppSettings {
   aiModel: string;
   reasoningBudget: number; // 1 to 5
@@ -291,6 +351,20 @@ export interface AppSettings {
   ollamaBaseUrl?: string;
   selectedOllamaModel?: string;
   geminiChatModel?: string;
+  // Configurações Avançadas de Animação e Movimento (Senior Full-Stack UI/UX)
+  lightboxOpenAnimation?: LightboxOpenAnimation;
+  imageSwitchAnimation?: ImageSwitchAnimation;
+  slideshowAnimation?: SlideshowAnimation;
+  fullscreenAnimation?: FullscreenAnimation;
+  animationSpeed?: AnimationSpeed;
+  animationDistance?: AnimationDistance;
+  disableAllAnimations?: boolean;
+  viewTransitionAnimation?: ViewTransitionAnimation;
+  modalAnimation?: ModalAnimation;
+  drawerAnimation?: DrawerAnimation;
+  taskDockAnimation?: TaskDockAnimation;
+  videoPlayerAnimation?: VideoPlayerAnimation;
+  customAnimationDurationMs?: number;
 }
 
 export interface VideoItem {

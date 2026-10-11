@@ -15,7 +15,10 @@ from typing import Dict, List, Any, Optional, Tuple, Set
 from pydantic import BaseModel, Field
 from PIL import Image, ImageStat
 
-from playwright.async_api import Page
+try:
+    from playwright.async_api import Page
+except ImportError:
+    Page = Any
 from ..core.models import DOMCandidateInfo, CandidateClassification
 from ..agent.llm_adapter import LLMAdapter
 

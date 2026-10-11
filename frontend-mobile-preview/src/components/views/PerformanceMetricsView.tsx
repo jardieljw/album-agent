@@ -5,6 +5,7 @@ import { useAppStore } from '../../store/useAppStore';
 
 export const PerformanceMetricsView: React.FC = () => {
   const { albums, jobs, settings } = useAppStore();
+  const isEn = settings?.language === 'en-US';
   const tPerf = translations[settings.language].performance;
 
   const allImages = albums.flatMap(a => a.images || []);
@@ -56,7 +57,7 @@ export const PerformanceMetricsView: React.FC = () => {
           <span>{tPerf.title || 'Performance & Storage Analytics'}</span>
         </h1>
         <p className="text-xs text-slate-400">
-          {tPerf.subtitle || 'Métricas consolidadas em tempo real com base nos álbuns e imagens extraídos no sistema'}
+          {tPerf.subtitle || (isEn ? "Consolidated real-time metrics based on extracted albums and media" : "Métricas consolidadas em tempo real com base nos álbuns e imagens extraídos no sistema")}
         </p>
       </div>
 
@@ -71,7 +72,7 @@ export const PerformanceMetricsView: React.FC = () => {
             {formatBytes(totalBytes)}
           </div>
           <p className="text-[10px] sm:text-[11px] text-slate-400 font-medium">
-            {(tPerf.albumsInLibrary || '{count} álbuns em biblioteca').replace('{count}', String(albums.length))}
+            {(tPerf.albumsInLibrary || (isEn ? "{count} albums in library" : "{count} álbuns em biblioteca")).replace('{count}', String(albums.length))}
           </p>
         </div>
 
@@ -97,20 +98,20 @@ export const PerformanceMetricsView: React.FC = () => {
             {totalImages}
           </div>
           <p className="text-[10px] sm:text-[11px] text-slate-400 font-medium">
-            {(tPerf.avgMegapixels || 'Média de {avg} MP por imagem').replace('{avg}', String(avgMp))}
+            {(tPerf.avgMegapixels || (isEn ? "Average {avg} MP per image" : "Média de {avg} MP por imagem")).replace('{avg}', String(avgMp))}
           </p>
         </div>
 
         <div className="p-4 sm:p-5 glass-panel rounded-3xl border border-border space-y-2">
           <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>{tPerf.avgSize || 'Tamanho Médio'}</span>
+            <span>{tPerf.avgSize || (isEn ? "Average Size" : "Tamanho Médio")}</span>
             <Layers size={16} className="text-amber-400 shrink-0" />
           </div>
           <div className="text-xl sm:text-2xl font-extrabold font-mono text-amber-400">
             {formatBytes(avgSizeBytes)}
           </div>
           <p className="text-[10px] sm:text-[11px] text-slate-400 font-medium">
-            {(tPerf.tasksCompleted || '{count} tarefas concluídas com sucesso').replace('{count}', String(jobs.filter(j => j.status === 'completed').length))}
+            {(tPerf.tasksCompleted || (isEn ? "{count} tasks completed successfully" : "{count} tarefas concluídas com sucesso")).replace('{count}', String(jobs.filter(j => j.status === 'completed').length))}
           </p>
         </div>
       </div>
@@ -118,7 +119,7 @@ export const PerformanceMetricsView: React.FC = () => {
       {/* Resolution Distribution Bar (Calculated Dynamically) */}
       <div className="glass-panel p-4 sm:p-6 rounded-3xl border border-border space-y-3.5 sm:space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-bold text-xs sm:text-sm text-slate-200">{tPerf.resolutionDistribution || "Distribuição de Resoluções Coletadas"}</h3>
+          <h3 className="font-bold text-xs sm:text-sm text-slate-200">{tPerf.resolutionDistribution || (isEn ? "Collected Resolution Distribution" : "Distribuição de Resoluções Coletadas")}</h3>
           <span className="text-[11px] text-slate-400 font-mono">{allImages.length} fotos analisadas</span>
         </div>
 
@@ -175,7 +176,7 @@ export const PerformanceMetricsView: React.FC = () => {
           </>
         ) : (
           <div className="p-6 text-center text-xs text-slate-500">
-            {tPerf.noImagesExtracted || 'Nenhuma imagem extraída ainda para calcular a distribuição.'}
+            {tPerf.noImagesExtracted || (isEn ? "No images extracted yet to compute distribution." : "Nenhuma imagem extraída ainda para calcular a distribuição.")}
           </div>
         )}
       </div>
@@ -209,15 +210,15 @@ export const PerformanceMetricsView: React.FC = () => {
         <div className="glass-panel p-4 sm:p-5 rounded-3xl border border-border space-y-3">
           <h3 className="font-bold text-xs sm:text-sm text-slate-200 flex items-center gap-2">
             <CheckCircle size={16} className="text-emerald-400" />
-            <span>{tPerf.pipelineEfficiency || 'Eficiência do Pipeline'}</span>
+            <span>{tPerf.pipelineEfficiency || (isEn ? "Pipeline Efficiency" : "Eficiência do Pipeline")}</span>
           </h3>
           <div className="space-y-2 text-xs">
             <div className="flex justify-between p-2.5 rounded-xl bg-surface-elevated/30 border border-border/50">
-              <span className="text-slate-400">{tPerf.originalYieldRate || "Taxa de Resolução Original:"}</span>
+              <span className="text-slate-400">{tPerf.originalYieldRate || (isEn ? "Original Resolution Rate:" : "Taxa de Resolução Original:")}</span>
               <span className="font-mono font-bold text-emerald-400">{yieldPercent}%</span>
             </div>
             <div className="flex justify-between p-2.5 rounded-xl bg-surface-elevated/30 border border-border/50">
-              <span className="text-slate-400">{tPerf.totalIndexedAlbums || "Total de Álbuns Indexados:"}</span>
+              <span className="text-slate-400">{tPerf.totalIndexedAlbums || (isEn ? "Total Indexed Albums:" : "Total de Álbuns Indexados:")}</span>
               <span className="font-mono font-bold text-slate-200">{albums.length}</span>
             </div>
             <div className="flex justify-between p-2.5 rounded-xl bg-surface-elevated/30 border border-border/50">
@@ -239,6 +240,7 @@ export const PerformanceMetricsView: React.FC = () => {
 // Componente dedicado para monitoramento em tempo real do Hugging Face e Render
 const StorageInfrastructureSection: React.FC = () => {
   const { settings } = useAppStore();
+  const isEn = settings?.language === 'en-US';
   const tPerf = translations[settings.language].performance;
   const [stats, setStats] = React.useState<any>(null);
   const [loading, setLoading] = React.useState<boolean>(true);
@@ -333,11 +335,11 @@ const StorageInfrastructureSection: React.FC = () => {
 
           <div className="text-[11px] text-slate-400 space-y-1 pt-1 border-t border-border/40">
             <div className="flex justify-between">
-              <span>{tPerf.secureStorage || 'Repositório Seguro:'}</span>
+              <span>{tPerf.secureStorage || (isEn ? "Secure Storage:" : "Repositório Seguro:")}</span>
               <span className="font-mono text-purple-300">{hf?.repo_id || 'album-data'}</span>
             </div>
             <div className="flex justify-between">
-              <span>{tPerf.archivedVideos || 'Vídeos Arquivados:'}</span>
+              <span>{tPerf.archivedVideos || (isEn ? "Archived Videos:" : "Vídeos Arquivados:")}</span>
               <span className="font-mono text-slate-200">{hf?.app_recorded_videos || hf?.files_count || 0}</span>
             </div>
             <div className="flex justify-between">
@@ -355,7 +357,7 @@ const StorageInfrastructureSection: React.FC = () => {
               <span>Render Local (Transbordo)</span>
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
-              DISCO TEMPORÁRIO
+              {isEn ? "TEMPORARY DISK" : "DISCO TEMPORÁRIO"}
             </span>
           </div>
 
@@ -365,7 +367,7 @@ const StorageInfrastructureSection: React.FC = () => {
                 {formatMB(renderLocal?.total_bytes_used || 0)}
               </span>
               <span className="text-xs font-mono text-slate-400">
-                {renderLocal?.videos_count || 0} vídeo(s)
+                {renderLocal?.videos_count || 0} {isEn ? "video(s)" : "vídeo(s)"}
               </span>
             </div>
             <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
@@ -379,7 +381,7 @@ const StorageInfrastructureSection: React.FC = () => {
           <div className="text-[11px] text-slate-400 space-y-1 pt-1 border-t border-border/40">
             <p className="text-[10px] text-amber-300/90 leading-tight flex items-start gap-1">
               <AlertTriangle size={13} className="text-amber-400 shrink-0 mt-0.5" />
-              <span>Armazena excessos caso a nuvem esteja cheia. O Render reinicia periodicamente; exclua ou migre arquivos locais quando possível.</span>
+              <span>{isEn ? "Stores spillover when cloud is full. Render restarts periodically; export or migrate local files when needed." : "Armazena excessos caso a nuvem esteja cheia. O Render reinicia periodicamente; exclua ou migre arquivos locais quando possível."}</span>
             </p>
           </div>
         </div>
@@ -399,7 +401,7 @@ const StorageInfrastructureSection: React.FC = () => {
           <div className="space-y-1">
             <div className="flex justify-between items-baseline">
               <span className="text-xl font-mono font-black text-cyan-300">
-                {streamOnly?.videos_count || 0} vídeos
+                {streamOnly?.videos_count || 0} {isEn ? "videos" : "vídeos"}
               </span>
               <span className="text-xs font-mono text-slate-400">
                 0 MB consumidos
@@ -412,7 +414,7 @@ const StorageInfrastructureSection: React.FC = () => {
 
           <div className="text-[11px] text-slate-400 space-y-1 pt-1 border-t border-border/40">
             <p className="text-[10px] text-slate-300 leading-tight">
-              Vídeos reproduzidos diretamente do servidor de origem sem download físico, preservando 100% da sua cota de armazenamento.
+              {isEn ? "Videos streamed directly from origin server without physical download, saving 100% disk storage." : "Vídeos reproduzidos diretamente do servidor de origem sem download físico, preservando 100% da sua cota de armazenamento."}
             </p>
           </div>
         </div>

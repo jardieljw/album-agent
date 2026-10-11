@@ -150,6 +150,18 @@ def get_true_image_url(url: str, session: requests.Session, referer: str) -> Opt
                 if not chunk:
                     return None
 
+                # Rejeita payloads anômalos de erro HTTP ou bloqueio de hotlink (< 20KB)
+                chunk_lower = chunk.lower()
+                if (file_sz and file_sz < 20000) or len(chunk) < 20000:
+                    generic_block_signatures = (
+                        b"hotlink", b"hot-link", b"hotlinking",
+                        b"access denied", b"forbidden", b"unauthorized",
+                        b"embed image", b"direct linking", b"bandwidth limit"
+                    )
+                    if any(sig in chunk_lower for sig in generic_block_signatures):
+                        logger.warning(f"[SurgicalScout] Bloqueio ou aviso de hotlink detectado em {url} (size={file_sz}). Rejeitando falso positivo.")
+                        return None
+
                 is_jpeg = chunk.startswith(b'\xff\xd8\xff')
                 is_png = chunk.startswith(b'\x89PNG')
                 is_gif = chunk.startswith(b'GIF8')
@@ -419,14 +431,12 @@ class GeminiSurgicalScout:
             if "logo" in href_lower or href_lower.endswith(".svg") or href.strip("/") == page_url.strip("/"):
                 continue
 
-            is_media_host = any(k in href_lower for k in [
-                "pixhost", "imagebam", "postimg", "turboimagehost",
-                "imgbox", "imagetwist", "fastpic", "imx.to", "acidimg", "picstate", "imgbb"
-            ])
             is_direct_ext = bool(re.search(r"\.(jpg|jpeg|png|webp|gif|bmp)(\?.*)?$", href, re.I))
-            is_photo_subpage = "/photo/" in href_lower or "/image/" in href_lower or "/view/" in href_lower
+            is_photo_subpage = any(pattern in href_lower for pattern in [
+                "/photo/", "/image/", "/view/", "/pic/", "/show/", "/viewer/", "/gallery/", "/i/", "/p/"
+            ]) or bool(re.search(r"/[a-zA-Z0-9_-]{6,}\.(html?)$", href_lower))
 
-            if (is_media_host or is_direct_ext or is_photo_subpage or img) and href not in seen_urls:
+            if (is_direct_ext or is_photo_subpage or img) and href not in seen_urls:
                 seen_urls.add(href)
                 items.append({
                     "target_url": href,
@@ -753,19 +763,19 @@ HTML DA AMOSTRA:
 
         await emit({
             "type": "status",
-            "message": f"Acessando galeria via HTTP: {url}",
+            "message": f"Accessing gallery via HTTP: {url}",
         })
         if has_gemini:
             await emit({
                 "type": "ai_thought",
                 "stage": "OBSERVATION",
-                "thought": f" [Gemini Surgical Scout] Conectado ao Gemini Cloud ({gemini_model}) + Raio-X Físico Binário em {domain}",
+                "thought": f" [Gemini Surgical Scout] Connected to Gemini Cloud ({gemini_model}) + Physical Binary Analysis on {domain}",
             })
         else:
             await emit({
                 "type": "ai_thought",
                 "stage": "OBSERVATION",
-                "thought": f"️ [Surgical Scout] Gemini Cloud não configurado. Operando com Motor Heurístico Determinístico + Raio-X Físico (100% local) em {domain}",
+                "thought": f"️ [Surgical Scout] Gemini Cloud not configured. Operating with Deterministic Heuristic Engine + Physical Analysis (100% local) on {domain}",
             })
 
         main_session = create_worker_session()
@@ -811,7 +821,7 @@ HTML DA AMOSTRA:
                     await b.close()
             except Exception as b_err:
                 logger.error(f"Playwright fallback also failed for {url}: {b_err}")
-                await emit({"type": "error", "error": f"Falha de conexão com {url}: {b_err}"})
+                await emit({"type": "error", "error": f"Connection failed to {url}: {b_err}"})
                 raise Exception(f"Falha ao carregar galeria {url}: {b_err}")
 
         soup = BeautifulSoup(raw_html, "html.parser")
@@ -848,7 +858,7 @@ HTML DA AMOSTRA:
                             await emit({
                                 "type": "ai_thought",
                                 "stage": "OBSERVATION",
-                                "thought": f"️ [Bypass Ativo] Barreira de idade regional contornada com sucesso via canal crawler (Googlebot). {len(gallery_items)} fotos desbloqueadas!",
+                                "thought": f"️ [Active Bypass] Age verification barrier successfully bypassed via crawler channel (Googlebot). {len(gallery_items)} photos unlocked!",
                             })
             except Exception as bot_err:
                 logger.warning(f"Crawler bypass fallback error: {bot_err}")
@@ -860,7 +870,7 @@ HTML DA AMOSTRA:
                 await emit({
                     "type": "ai_thought",
                     "stage": "OBSERVATION",
-                    "thought": f"️ [Bypass Ativo] Ativando Chromium headless com bypass de consentimento...",
+                    "thought": f"️ [Active Bypass] Launching headless Chromium with consent bypass...",
                 })
                 b_engine = BrowserEngine(headless=True)
                 await b_engine.start()
@@ -887,13 +897,13 @@ HTML DA AMOSTRA:
         await emit({
             "type": "ai_thought",
             "stage": "HYPOTHESIS_GENERATION",
-            "thought": f" [Surgical Filter] Mapeados {len(gallery_items)} links de mídia genuínos. Lixo e propagandas eliminados com sucesso.",
+            "thought": f" [Surgical Filter] Mapped {len(gallery_items)} genuine media links. Noise and advertisements filtered successfully.",
         })
 
         if not gallery_items:
             await emit({
                 "type": "status",
-                "message": "Nenhuma imagem de galeria encontrada no corpo da página.",
+                "message": "No gallery images found in page body.",
             })
             dur = round(time.time() - start_time, 2)
             try:
@@ -918,13 +928,13 @@ HTML DA AMOSTRA:
             await emit({
                 "type": "ai_thought",
                 "stage": "PROVEN_VECTOR",
-                "thought": f" [Banco de Conhecimento] {len(cached_matches)} servidor(es) identificados em cache ({', '.join(cached_matches)}). Extração instantânea (0ms) ativada!",
+                "thought": f" [Knowledge Base] {len(cached_matches)} servidor(es) identificados em cache ({', '.join(cached_matches)}). Instant extraction (0ms) activated!",
             })
 
         await emit({
             "type": "ai_thought",
             "stage": "SPECULATIVE_PROBING",
-            "thought": f" [Raio-X Físico & Paralelo] Processando {len(gallery_items)} itens concorrentemente...",
+            "thought": f" [Parallel Inspection] Processing {len(gallery_items)} items concurrently...",
         })
 
         all_records: List[Dict[str, Any]] = []
@@ -936,7 +946,7 @@ HTML DA AMOSTRA:
                 await emit({
                     "type": "ai_thought",
                     "stage": "PROVEN_VECTOR",
-                    "thought": f" [Autoaprendizado] Nova regra aprendida para o host '{learned_domain}' ({learned_rule.get('css_selector') or learned_rule.get('strategy')}) e gravada em data/host_rules.json!",
+                    "thought": f" [Self-Learning] Nova regra aprendida para o host '{learned_domain}' ({learned_rule.get('css_selector') or learned_rule.get('strategy')}) and saved to data/host_rules.json!",
                 })
             asyncio.run_coroutine_threadsafe(push_learned(), loop)
 
@@ -1016,7 +1026,7 @@ HTML DA AMOSTRA:
                                     resolution_method=ResolutionMethod.VERIFIED_CDN_CANDIDATE,
                                     confidence=1.0,
                                     validation_status="PASS",
-                                    source_page=url,
+                                    source_page=record.get("provenance_chain", {}).get("viewer_page") or url,
                                     color_palette=record.get("color_palette"),
                                 )
                                 resolved_images.append(img_obj)
@@ -1039,7 +1049,7 @@ HTML DA AMOSTRA:
                                     })
                                     await emit({
                                         "type": "status",
-                                        "message": f"Extraído {c_count}/{t_count}: {img.original_url[:60]}...",
+                                        "message": f"Extracted {c_count}/{t_count}: {img.original_url[:60]}...",
                                     })
 
                                 asyncio.run_coroutine_threadsafe(push_event(img_obj, completed_count, len(gallery_items)), loop)
@@ -1055,7 +1065,7 @@ HTML DA AMOSTRA:
         await emit({
             "type": "ai_thought",
             "stage": "PROVEN_VECTOR",
-            "thought": f" [Banco de Conhecimento] {len(all_records)} fotos gravadas com sucesso ({'IA Gemini ativa' if has_gemini else 'Modo Determinístico/Raio-X'}) em data/image_knowledge_base.json e data/albums/!",
+            "thought": f" [Knowledge Base] {len(all_records)} photos saved successfully ({'Gemini AI active' if has_gemini else 'Deterministic/Physical Mode'}) em data/image_knowledge_base.json e data/albums/!",
         })
 
         duration_val = round(time.time() - start_time, 2)

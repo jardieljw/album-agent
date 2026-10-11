@@ -9,7 +9,10 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
-from playwright.async_api import Page
+try:
+    from playwright.async_api import Page
+except ImportError:
+    Page = Any
 
 from ..core.models import (
     DOMCandidateInfo,

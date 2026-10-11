@@ -1,9 +1,15 @@
 import React, { useEffect } from 'react';
 import { X, Keyboard, Command } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
+import {
+  getModalAnimationClass,
+  getSpeedClass,
+  getDistanceClass
+} from '../../services/motionConfig';
 
 export const KeybindingsModal: React.FC = () => {
-  const { keybindingsModalOpen, setKeybindingsModalOpen } = useAppStore();
+  const { keybindingsModalOpen, setKeybindingsModalOpen, settings } = useAppStore();
+  const isPt = settings?.language === 'pt-BR';
 
   useEffect(() => {
     if (!keybindingsModalOpen) return;
@@ -17,15 +23,16 @@ export const KeybindingsModal: React.FC = () => {
   if (!keybindingsModalOpen) return null;
 
   const shortcuts = [
-    { key: 'Ctrl + K / Cmd + K', desc: 'Abrir Command Palette global' },
-    { key: 'Seta Direita (->)', desc: 'Próxima foto no Lightbox / Slideshow' },
-    { key: 'Seta Esquerda (<-)', desc: 'Foto anterior no Lightbox / Slideshow' },
-    { key: 'Espaço', desc: 'Pausar ou Retomar Apresentação de Slides' },
-    { key: 'Z', desc: 'Alternar zoom 100% / 250% no Lightbox' },
-    { key: 'C', desc: 'Alternar Split Comparador Original' },
-    { key: 'D', desc: 'Download direto do Original ativo' },
-    { key: 'F', desc: 'Modo Tela Cheia (Fullscreen)' },
-    { key: 'Esc', desc: 'Fechar modais, Lightbox, Slideshow ou busca' },
+    { key: 'Ctrl + K / Cmd + K', desc: isPt ? 'Abrir Command Palette global' : 'Open global Command Palette' },
+    { key: isPt ? 'Seta Direita (->)' : 'Right Arrow (->)', desc: isPt ? 'Próxima foto no Lightbox / Slideshow' : 'Next photo in Lightbox / Slideshow' },
+    { key: isPt ? 'Seta Esquerda (<-)' : 'Left Arrow (<-)', desc: isPt ? 'Foto anterior no Lightbox / Slideshow' : 'Previous photo in Lightbox / Slideshow' },
+    { key: isPt ? 'Espaço' : 'Space', desc: isPt ? 'Pausar ou Retomar Apresentação de Slides' : 'Pause or Resume Slideshow' },
+    { key: 'Z', desc: isPt ? 'Alternar zoom 100% / 250% no Lightbox' : 'Toggle 100% / 250% zoom in Lightbox' },
+    { key: 'C', desc: isPt ? 'Alternar Split Comparador Original' : 'Toggle Split Original Comparator' },
+    { key: 'D', desc: isPt ? 'Download direto do Original ativo' : 'Direct download of active Original' },
+    { key: 'F', desc: isPt ? 'Modo Tela Cheia (Fullscreen)' : 'Fullscreen mode' },
+    { key: 'P / A', desc: isPt ? 'Alternar Ajustar à Tela / Preencher Tela (Fit / Fill)' : 'Toggle Fit to Screen / Fill Screen (Fit / Fill)' },
+    { key: 'Esc', desc: isPt ? 'Fechar modais, Lightbox, Slideshow ou busca' : 'Close modals, Lightbox, Slideshow, or search' },
   ];
 
   return (
@@ -35,12 +42,12 @@ export const KeybindingsModal: React.FC = () => {
     >
       <div
         onClick={e => e.stopPropagation()}
-        className="bg-surface border border-border shadow-2xl rounded-2xl w-full max-w-xl overflow-hidden flex flex-col"
+        className={`bg-surface border border-border shadow-2xl rounded-2xl w-full max-w-xl overflow-hidden flex flex-col ${getModalAnimationClass(settings.modalAnimation || 'scale', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}
       >
         <div className="p-4 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Keyboard size={18} className="text-brand-400" />
-            <h3 className="font-bold text-sm text-slate-100">Atalhos de Teclado (Power User)</h3>
+            <h3 className="font-bold text-sm text-slate-100">{isPt ? 'Atalhos de Teclado (Power User)' : 'Keyboard Shortcuts (Power User)'}</h3>
           </div>
           <button onClick={() => setKeybindingsModalOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200">
             <X size={16} />

@@ -330,7 +330,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             <button type="button" class="btn-rename-album btn-rename-target" title="Rename album title"> Renomear</button>
                             <button type="button" class="btn-download-zip btn-zip-target" title="Download all high-res 4K images packaged in a structured ZIP">⬇ Download Full Album (ZIP)</button>
                             <button type="button" class="btn-export-json btn-json-target" title="Download complete JSON metadata entity"> Export JSON</button>
-                            <button type="button" class="btn-delete-album btn-delete-target" title="Delete album permanently from disk"> Excluir</button>
+                            <button type="button" class="btn-delete-album btn-delete-target" title="Delete album permanently from disk"> Delete</button>
                         </div>
                     </div>
                     <div class="provenance-chain hidden album-provenance"></div>
@@ -339,12 +339,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 <!-- Active Gallery Explorer View & Sort Controls -->
                 <div class="active-gallery-toolbar">
                     <div class="gallery-controls-left">
-                        <span class="gallery-toolbar-label">Exibição:</span>
+                        <span class="gallery-toolbar-label">View:</span>
                         <div class="view-buttons-group">
-                            <button type="button" class="btn-view-mode active" data-mode="grid-lg" title="Ícones grandes"> Grandes</button>
-                            <button type="button" class="btn-view-mode" data-mode="grid-xl" title="Ícones extra grandes"> Extra Grandes</button>
-                            <button type="button" class="btn-view-mode" data-mode="grid-md" title="Ícones médios"> Médios</button>
-                            <button type="button" class="btn-view-mode" data-mode="grid-sm" title="Ícones pequenos">⊞ Pequenos</button>
+                            <button type="button" class="btn-view-mode active" data-mode="grid-lg" title="Large Icons"> Large</button>
+                            <button type="button" class="btn-view-mode" data-mode="grid-xl" title="Extra Large Icons"> Extra Large</button>
+                            <button type="button" class="btn-view-mode" data-mode="grid-md" title="Medium Icons"> Medium</button>
+                            <button type="button" class="btn-view-mode" data-mode="grid-sm" title="Small Icons">⊞ Small</button>
                             <button type="button" class="btn-view-mode" data-mode="list" title="Lista"> Lista</button>
                             <button type="button" class="btn-view-mode" data-mode="details" title="Detalhes">≣ Detalhes</button>
                             <button type="button" class="btn-view-mode" data-mode="tiles" title="Blocos"> Blocos</button>
@@ -354,7 +354,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <label class="gallery-toolbar-label">Ordenar:</label>
                         <select class="gallery-sort-select explorer-select">
                             <option value="position">Ordem Original (#)</option>
-                            <option value="resolution">Maior Resolução (4K)</option>
+                            <option value="resolution">Highest Resolution (4K)</option>
                             <option value="status">Status (Resolvidos primeiro)</option>
                         </select>
                     </div>
@@ -423,11 +423,11 @@ document.addEventListener("DOMContentLoaded", () => {
         multiAlbumNav.classList.remove("hidden");
         multiAlbumTabs.innerHTML = "";
 
-        // "Todos os Álbuns" Tab
+        // "All Albums" Tab
         const allTab = document.createElement("button");
         allTab.type = "button";
         allTab.className = `btn-album-tab ${currentSelectedTabSession === 'all' ? 'active' : ''}`;
-        allTab.innerHTML = ` Todos os Álbuns (${activeSessions.size})`;
+        allTab.innerHTML = ` All Albums (${activeSessions.size})`;
         allTab.addEventListener("click", () => {
             currentSelectedTabSession = "all";
             updateMultiAlbumNav();
@@ -582,7 +582,7 @@ document.addEventListener("DOMContentLoaded", () => {
         e.preventDefault();
         let url = targetUrlInput.value.trim();
         if (!url) {
-            alert("Por favor, digite ou cole a URL do álbum ou galeria que deseja extrair.");
+            alert("Please enter or paste the album or gallery URL to extract.");
             targetUrlInput.focus();
             return;
         }
@@ -607,7 +607,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         appendTerminalLog({
             stage: "PAGE_INGESTION",
-            thought: ` Iniciando extração autônoma em: ${url} (Engine: ${selectedEngine}, Modelo: ${selectedModel})`,
+            thought: ` Starting autonomous extraction on: ${url} (Engine: ${selectedEngine}, Modelo: ${selectedModel})`,
         });
 
         try {
@@ -639,7 +639,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (btnText) btnText.innerText = "Investigate & Extract";
             appendTerminalLog({
                 stage: "REFLECTION",
-                thought: ` Erro ao iniciar análise: ${err.message}`,
+                thought: ` Error starting analysis: ${err.message}`,
             });
         }
     });
@@ -880,11 +880,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     <tr>
                         <th style="width: 40px;">#</th>
                         <th style="width: 50px;">Capa</th>
-                        <th>Dimensões</th>
+                        <th>Dimensions</th>
                         <th>Formato</th>
-                        <th>Método</th>
+                        <th>Method</th>
                         <th>Status</th>
-                        <th style="width: 100px;">Ação</th>
+                        <th style="width: 100px;">Action</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -893,7 +893,7 @@ document.addEventListener("DOMContentLoaded", () => {
             sorted.forEach(img => {
                 const tr = document.createElement("tr");
                 const isPass = img.validation_status === "PASS";
-                const displaySrc = img.original_url || img.thumbnail_url;
+                const displaySrc = img.thumbnail_url || img.original_url;
                 const proxyDisplaySrc = getProxyUrl(displaySrc, session.source_page);
                 const resText = (img.width && img.height) ? `${img.width}x${img.height}` : "4K Original";
 
@@ -913,19 +913,52 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             grid.appendChild(table);
         } else {
-            // Cards / List / Tiles
-            sorted.forEach(img => {
-                const imgCard = createSingleImageCard(img, session);
-                grid.appendChild(imgCard);
-            });
+            // Cards / List / Tiles com carregamento progressivo virtualizado
+            const initialLimit = 48;
+            const renderChunk = (items, startIdx) => {
+                const fragment = document.createDocumentFragment();
+                items.forEach((img, offset) => {
+                    const imgCard = createSingleImageCard(img, session, startIdx + offset);
+                    fragment.appendChild(imgCard);
+                });
+                grid.appendChild(fragment);
+            };
+
+            renderChunk(sorted.slice(0, initialLimit), 0);
+
+            if (sorted.length > initialLimit) {
+                let currentRendered = initialLimit;
+                const sentinel = document.createElement("div");
+                sentinel.className = "gallery-load-sentinel";
+                sentinel.style.cssText = "grid-column: 1 / -1; padding: 20px; text-align: center; color: #94a3b8; font-size: 0.8rem; font-family: monospace;";
+                sentinel.innerText = `Carregando mais fotos (${currentRendered} de ${sorted.length})...`;
+                grid.appendChild(sentinel);
+
+                const observer = new IntersectionObserver((entries) => {
+                    if (entries[0].isIntersecting && currentRendered < sorted.length) {
+                        const nextChunk = sorted.slice(currentRendered, currentRendered + 48);
+                        renderChunk(nextChunk, currentRendered);
+                        currentRendered += nextChunk.length;
+                        if (currentRendered >= sorted.length) {
+                            observer.disconnect();
+                            sentinel.remove();
+                        } else {
+                            sentinel.innerText = `Carregando mais fotos (${currentRendered} de ${sorted.length})...`;
+                            grid.appendChild(sentinel);
+                        }
+                    }
+                }, { rootMargin: "500px" });
+                observer.observe(sentinel);
+            }
         }
     }
 
-    function createSingleImageCard(imgData, session) {
+    function createSingleImageCard(imgData, session, globalIdx = 0) {
         const isPass = imgData.validation_status === "PASS";
         const resText = (imgData.width && imgData.height) ? `${imgData.width}x${imgData.height}` : "4K Original";
-        const displaySrc = imgData.original_url || imgData.thumbnail_url;
+        const displaySrc = imgData.thumbnail_url || imgData.original_url;
         const proxyDisplaySrc = getProxyUrl(displaySrc, session.source_page);
+        const isTop = globalIdx < 16;
 
         const card = document.createElement("div");
         card.className = "gallery-item";
@@ -933,7 +966,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         card.innerHTML = `
             <div class="gallery-img-wrapper">
-                <img src="${proxyDisplaySrc}" alt="Photo ${imgData.position}" referrerpolicy="no-referrer" loading="lazy" />
+                <img src="${proxyDisplaySrc}" alt="Photo ${imgData.position}" referrerpolicy="no-referrer" loading="${isTop ? 'eager' : 'lazy'}" ${isTop ? 'fetchpriority="high"' : 'fetchpriority="low"'} />
                 <span class="img-pos-badge">#${imgData.position}</span>
                 <span class="img-res-badge ${isPass ? 'pass' : 'unresolved'}">${resText}</span>
                 <div class="gallery-action-bar">
@@ -985,7 +1018,7 @@ document.addEventListener("DOMContentLoaded", () => {
     scanBtn.addEventListener("click", async () => {
         let url = teachUrl.value.trim();
         if (!url) {
-            alert("Por favor, digite ou cole a URL da página para escanear os candidatos.");
+            alert("Please enter or paste page URL to scan candidates.");
             teachUrl.focus();
             return;
         }
@@ -1181,7 +1214,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     btnSelectSameContainer.addEventListener("click", () => {
         if (selectedForBatch.size === 0) {
-            alert("Selecione pelo menos 1 imagem primeiro para que o sistema identifique a grade/container correspondente!");
+            alert("Select at least 1 image first so the system can identify the target container!");
             return;
         }
 
@@ -1469,7 +1502,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 btnCopyTerminalLogs.style.color = "";
             }, 1800);
         }).catch(err => {
-            alert("Não foi possível copiar os logs: " + err);
+            alert("Could not copy logs: " + err);
         });
     });
 
@@ -1604,9 +1637,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function fetchAndRenderLibrary() {
         try {
-            libraryContainer.innerHTML = '<div class="empty-audit">Carregando álbuns salvos em disco...</div>';
+            libraryContainer.innerHTML = '<div class="empty-audit">Loading albums saved to disk...</div>';
             const res = await fetch("/api/albums");
-            if (!res.ok) throw new Error("Erro ao carregar álbuns");
+            if (!res.ok) throw new Error("Error loading albums");
             allSavedAlbums = await res.json();
             renderExplorerLibrary();
         } catch (e) {
@@ -1638,8 +1671,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!allSavedAlbums || allSavedAlbums.length === 0) {
             libraryContainer.innerHTML = `
                 <div class="empty-library-box">
-                    <h4>Nenhum álbum salvo em disco ainda</h4>
-                    <p>Execute uma extração no Modo 1 ou Modo 2. Todos os álbuns 4K são salvos de forma persistente.</p>
+                    <h4>No albums saved to disk yet</h4>
+                    <p>Execute uma extração no Modo 1 ou Modo 2. All 4K albums are persistently saved to disk.</p>
                 </div>
             `;
             return;
@@ -1701,7 +1734,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         if (filtered.length === 0) {
-            libraryContainer.innerHTML = '<div class="empty-audit">Nenhum álbum encontrado com os filtros selecionados.</div>';
+            libraryContainer.innerHTML = '<div class="empty-audit">No albums found matching selected filters.</div>';
             return;
         }
 
@@ -1742,10 +1775,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         </div>
                     </div>
                     <div class="lib-actions">
-                        <button type="button" class="lib-btn-view" data-id="${sid}"> Ver Álbum</button>
+                        <button type="button" class="lib-btn-view" data-id="${sid}"> View Album</button>
                         <a href="/api/albums/${sid}/download-zip" target="_blank" class="lib-btn-zip" title="Baixar ZIP">⬇ ZIP</a>
                         <button type="button" class="lib-btn-rename" data-id="${sid}" title="Renomear Álbum"></button>
-                        <button type="button" class="lib-btn-del" data-id="${sid}" title="Excluir Álbum"></button>
+                        <button type="button" class="lib-btn-del" data-id="${sid}" title="Delete Álbum"></button>
                     </div>
                 </div>
             `;
@@ -1806,7 +1839,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <button type="button" class="lib-btn-view" style="padding: 4px 8px; font-size: 0.72rem;" data-id="${sid}"> Ver</button>
                         <a href="/api/albums/${sid}/download-zip" target="_blank" class="lib-btn-zip" style="padding: 4px 6px; font-size: 0.72rem;" title="ZIP">⬇</a>
                         <button type="button" class="lib-btn-rename" data-id="${sid}" style="padding: 4px 6px; font-size: 0.72rem; cursor: pointer;"></button>
-                        <button type="button" class="lib-btn-del" data-id="${sid}" style="padding: 4px 6px; font-size: 0.72rem;" title="Excluir"></button>
+                        <button type="button" class="lib-btn-del" data-id="${sid}" style="padding: 4px 6px; font-size: 0.72rem;" title="Delete"></button>
                     </div>
                 </td>
             `;

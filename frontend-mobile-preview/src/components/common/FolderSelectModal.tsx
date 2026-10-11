@@ -3,6 +3,7 @@ import { Folder, FolderPlus, Check, X, HardDrive } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../i18n/translations';
 import { IconBadge } from './IconBadge';
+import { ModalPortal } from './ModalPortal';
 
 interface FolderSelectModalProps {
   isOpen: boolean;
@@ -121,10 +122,11 @@ export const FolderSelectModal: React.FC<FolderSelectModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in"
-      onClick={onClose}
-    >
+    <ModalPortal>
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in"
+        onClick={onClose}
+      >
       <div
         className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-2xl p-5 shadow-2xl space-y-4"
         onClick={(e) => e.stopPropagation()}
@@ -264,5 +266,6 @@ export const FolderSelectModal: React.FC<FolderSelectModalProps> = ({
         </div>
       </div>
     </div>
-  );
+  </ModalPortal>
+);
 };

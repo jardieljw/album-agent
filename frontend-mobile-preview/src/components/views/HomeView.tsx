@@ -86,7 +86,7 @@ export const HomeView: React.FC = () => {
       list.push({
         id: album.id,
         type: isGif ? 'gif' : 'album',
-        title: album.title || (isEn ? 'Untitled Album' : 'Álbum Sem Título'),
+        title: album.title || (isEn ? 'Untitled Album' : (t.untitledAlbum || 'Álbum Sem Título')),
         timestamp: isNaN(parsedTime) ? 0 : parsedTime,
         folder: album.folder || (isEn ? 'General' : 'Geral'),
         thumbnailUrl: cover,
@@ -104,7 +104,7 @@ export const HomeView: React.FC = () => {
       list.push({
         id: video.id,
         type: 'video',
-        title: video.title || video.filename || (isEn ? 'Untitled Video' : 'Vídeo Sem Título'),
+        title: video.title || video.filename || (isEn ? 'Untitled Video' : (t.untitledVideo || 'Vídeo Sem Título')),
         timestamp: isNaN(parsedTime) ? 0 : parsedTime,
         folder: video.folder || (isEn ? 'Extracted' : 'Extraídos'),
         thumbnailUrl: video.thumbnailUrl || '',
@@ -139,9 +139,7 @@ export const HomeView: React.FC = () => {
       description: t.moduleMultiAlbumDesc || (isEn ? 'Mass scanning of creator profiles and categories with real-time streaming.' : 'Varredura em massa de perfis, criadores e galerias com streaming em tempo real.'),
       icon: Compass,
       accentColor: 'indigo',
-      iconVariant: 'sapphire',
-      badge: t.newBadge || (isEn ? 'NEW' : 'NOVO'),
-      badgeStyle: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+      iconVariant: 'sapphire'
     },
     {
       id: 'web-video-scraper',
@@ -149,9 +147,7 @@ export const HomeView: React.FC = () => {
       description: t.moduleWebVideoDesc || (isEn ? 'Concurrent scraping and download of web channels and videos with built-in player.' : 'Raspagem e download concorrente de canais e vídeos com player integrado.'),
       icon: Film,
       accentColor: 'violet',
-      iconVariant: 'rose',
-      badge: t.newBadge || (isEn ? 'NEW' : 'NOVO'),
-      badgeStyle: 'bg-violet-500/20 text-violet-300 border-violet-500/30'
+      iconVariant: 'rose'
     },
     {
       id: 'extractor',

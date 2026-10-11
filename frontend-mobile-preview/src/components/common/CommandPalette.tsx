@@ -18,6 +18,11 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../i18n/translations';
+import {
+  getModalAnimationClass,
+  getSpeedClass,
+  getDistanceClass
+} from '../../services/motionConfig';
 import { ViewId, Album, VideoItem, AlbumFolder, VideoFolder } from '../../types';
 import { IconBadge } from './IconBadge';
 
@@ -261,7 +266,7 @@ export const CommandPalette: React.FC = () => {
         onClick={() => setCommandPaletteOpen(false)}
       ></div>
 
-      <div className="relative w-full max-w-2xl bg-surface border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col z-10 animate-scale-up">
+      <div className={`relative w-full max-w-2xl bg-surface border border-border shadow-2xl rounded-2xl overflow-hidden flex flex-col z-10 ${getModalAnimationClass(settings.modalAnimation || 'scale', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}>
         {/* Search Input */}
         <div className="p-4 border-b border-border flex items-center gap-3">
           <IconBadge icon={<Search size={16} />} variant="cyan" size="sm" />

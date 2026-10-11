@@ -14,6 +14,7 @@ import httpx
 from PIL import Image
 
 from ..core.models import ValidationResult, ValidationVerdict
+from ..core.network_profiles import resolve_anti_hotlink_headers
 
 
 class ImageValidator:
@@ -76,13 +77,10 @@ class ImageValidator:
         if candidate_url.startswith("data:image/"):
             return self._validate_data_uri(candidate_url, expected_min_width, expected_min_height)
 
-        headers = {
-            "User-Agent": self.user_agent,
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        if referer:
-            headers["Referer"] = referer
+        headers = resolve_anti_hotlink_headers(candidate_url, referer=referer)
+        headers["User-Agent"] = self.user_agent
+        headers["Accept"] = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+        headers["Accept-Language"] = "en-US,en;q=0.9"
 
         backoff = 0.5
         last_error = None

@@ -141,4 +141,3 @@ async def test_toggle_album_favorite_persistence(tmp_path, monkeypatch):
         data2 = json.load(f)
     assert data2.get("is_favorite") is False
     assert data2.get("created_at") == "2026-03-01 10:00:00 UTC"
-

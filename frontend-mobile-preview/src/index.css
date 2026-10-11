@@ -185,3 +185,592 @@ input[type="range"] {
   background: linear-gradient(135deg, #f43f5e, #be123c);
   box-shadow: 0 4px 14px 0 rgba(244, 63, 94, 0.25);
 }
+
+/* Windows Photos App - Fluid Cinematic Entrance & Switching Animations */
+@keyframes photoExpandIn {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-open-scale, 0.75)));
+    transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-open-scale, 0.75)));
+    filter: blur(6px);
+  }
+  40% {
+    opacity: 0.85;
+    filter: blur(1px);
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0px);
+  }
+}
+@-webkit-keyframes photoExpandIn {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-open-scale, 0.75)));
+    filter: blur(6px);
+  }
+  40% {
+    opacity: 0.85;
+    filter: blur(1px);
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0px);
+  }
+}
+
+@keyframes photoSwitchIn {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-scale, 0.92)));
+    transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-scale, 0.92)));
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@-webkit-keyframes photoSwitchIn {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-scale, 0.92)));
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes modalBackdropFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Transição Fluida da Origem do Clique (Card Zoom / iOS Shared Element Transition) */
+@keyframes photoExpandFromOrigin {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, 0.35));
+    transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, 0.35));
+    border-radius: 1.25rem;
+  }
+  65% {
+    opacity: 1;
+    border-radius: 0.85rem;
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
+    border-radius: 1rem;
+  }
+}
+@-webkit-keyframes photoExpandFromOrigin {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, 0.35));
+    border-radius: 1.25rem;
+  }
+  65% {
+    opacity: 1;
+    border-radius: 0.85rem;
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+    border-radius: 1rem;
+  }
+}
+
+.animate-photo-origin {
+  -webkit-animation: photoExpandFromOrigin var(--anim-speed-duration, 0.38s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: photoExpandFromOrigin var(--anim-speed-duration, 0.38s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: transform, opacity, border-radius;
+}
+
+.animate-photo-expand {
+  animation: photoExpandIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity, filter;
+}
+
+.animate-photo-switch {
+  animation: photoSwitchIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-backdrop-fade {
+  animation: modalBackdropFadeIn 0.35s ease-out both;
+}
+
+/* Transição Fade / Dissolvência Pura */
+@keyframes photoFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Transição Deslize Lateral Suave (Slide Horizontal) */
+@keyframes photoSlideInRight {
+  0% {
+    opacity: 0.15;
+    transform: translateX(var(--anim-dist-translate, 36px)) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+/* Transição Zoom In Dinâmico (Punchy Pop Suave com Overshoot Tátil - iOS & Desktop) */
+@keyframes photoZoomIn {
+  0% {
+    opacity: 0.15;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-scale, 0.85)));
+    transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-scale, 0.85)));
+  }
+  68% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(calc(var(--anim-dist-overshoot, 1.052) * 0.98));
+    transform: translate3d(0, 0, 0) scale(calc(var(--anim-dist-overshoot, 1.052) * 0.98));
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@-webkit-keyframes photoZoomIn {
+  0% {
+    opacity: 0.15;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, var(--anim-dist-scale, 0.85)));
+  }
+  68% {
+    opacity: 1;
+    -webkit-transform: scale(calc(var(--anim-dist-overshoot, 1.052) * 0.98)) translate3d(0, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: scale(1) translate3d(0, 0, 0);
+  }
+}
+
+.animate-photo-fade {
+  animation: photoFadeIn var(--anim-speed-duration, 0.35s) ease-out both;
+  will-change: opacity;
+}
+
+.animate-photo-slide {
+  animation: photoSlideInRight var(--anim-speed-duration, 0.35s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-photo-zoom {
+  animation: photoZoomIn var(--anim-speed-duration, 0.35s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-photo-none {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Transições de Telas & Abas (View Transitions) */
+@keyframes viewFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes viewSlideIn {
+  0% {
+    opacity: 0.15;
+    transform: translateX(var(--anim-dist-translate, 24px));
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes viewZoomIn {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: scale(var(--anim-dist-scale, 0.90));
+    transform: scale(var(--anim-dist-scale, 0.90));
+  }
+  70% {
+    opacity: 1;
+    -webkit-transform: scale(1.02);
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: none;
+    transform: none;
+  }
+}
+@-webkit-keyframes viewZoomIn {
+  0% {
+    opacity: 0.2;
+    -webkit-transform: scale(var(--anim-dist-scale, 0.90));
+  }
+  70% {
+    opacity: 1;
+    -webkit-transform: scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: none;
+  }
+}
+
+.animate-view-fade {
+  animation: viewFadeIn var(--anim-speed-duration, 0.22s) ease-out;
+}
+
+.animate-view-slide {
+  animation: viewSlideIn var(--anim-speed-duration, 0.26s) cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-view-zoom {
+  animation: viewZoomIn var(--anim-speed-duration, 0.26s) cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Transições de Modais do Sistema (Modal Animations) */
+@keyframes modalScaleIn {
+  0% {
+    opacity: 0.25;
+    transform: scale(var(--anim-dist-scale, 0.95));
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes modalSlideUpIn {
+  0% {
+    opacity: 0.2;
+    transform: translateY(var(--anim-dist-translate, 32px));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-modal-scale {
+  animation: modalScaleIn var(--anim-speed-duration, 0.28s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-modal-slide-up {
+  animation: modalSlideUpIn var(--anim-speed-duration, 0.30s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-modal-fade {
+  animation: viewFadeIn var(--anim-speed-duration, 0.24s) ease-out both;
+  will-change: opacity;
+}
+
+/* Transições de Gavetas Laterais (Drawers) */
+@keyframes drawerSlideInRight {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.animate-drawer-slide {
+  animation: drawerSlideInRight var(--anim-speed-duration, 0.30s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+
+.animate-drawer-fade {
+  animation: viewFadeIn var(--anim-speed-duration, 0.24s) ease-out both;
+  will-change: opacity;
+}
+
+/* Transições do MiniTaskDock */
+@keyframes dockSlideUpIn {
+  0% {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dockBounceIn {
+  0% {
+    opacity: 0.4;
+    transform: translateY(var(--anim-dist-translate, 32px)) scale(0.96);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-dock-slide-up {
+  animation: dockSlideUpIn var(--anim-speed-duration, 0.30s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-dock-bounce {
+  animation: dockBounceIn var(--anim-speed-duration, 0.38s) cubic-bezier(0.25, 1, 0.5, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-dock-fade {
+  animation: viewFadeIn var(--anim-speed-duration, 0.24s) ease-out both;
+  will-change: opacity;
+}
+
+/* Transições do Player de Vídeo */
+@keyframes videoZoomIn {
+  0% {
+    opacity: 0.2;
+    transform: scale(var(--anim-dist-scale, 0.94));
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-video-zoom {
+  animation: videoZoomIn var(--anim-speed-duration, 0.30s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+.animate-video-fade {
+  animation: viewFadeIn var(--anim-speed-duration, 0.26s) ease-out both;
+  will-change: opacity;
+}
+
+.animate-video-slide-up {
+  animation: modalSlideUpIn var(--anim-speed-duration, 0.32s) cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+/* Classes utilitárias para override global de velocidade de animação */
+.anim-speed-ultra-fast {
+  --anim-speed-duration: 0.18s;
+  animation-duration: 0.18s !important;
+  transition-duration: 0.18s !important;
+}
+
+.anim-speed-fast {
+  --anim-speed-duration: 0.25s;
+  animation-duration: 0.25s !important;
+  transition-duration: 0.25s !important;
+}
+
+.anim-speed-normal {
+  --anim-speed-duration: 0.35s;
+  animation-duration: 0.35s !important;
+  transition-duration: 0.35s !important;
+}
+
+.anim-speed-slow {
+  --anim-speed-duration: 0.55s;
+  animation-duration: 0.55s !important;
+  transition-duration: 0.55s !important;
+}
+
+/* Classes utilitárias para amplitude/distância do movimento (Senior UI/UX Motion) */
+.anim-dist-subtle {
+  --anim-dist-scale: 0.96;
+  --anim-dist-translate: 16px;
+  --anim-dist-overshoot: 1.025;
+  --anim-dist-open-scale: 0.88;
+}
+
+.anim-dist-normal {
+  --anim-dist-scale: 0.92;
+  --anim-dist-translate: 36px;
+  --anim-dist-overshoot: 1.052;
+  --anim-dist-open-scale: 0.75;
+}
+
+.anim-dist-large {
+  --anim-dist-scale: 0.82;
+  --anim-dist-translate: 75px;
+  --anim-dist-overshoot: 1.10;
+  --anim-dist-open-scale: 0.60;
+}
+
+/* Fullscreen Cursor Suppression (Garante que o ponteiro do mouse suma 100% no modo tela cheia inativo) */
+.fullscreen-cursor-hidden,
+.fullscreen-cursor-hidden * {
+  cursor: none !important;
+}
+
+/* Transições fluidas para modo de preenchimento e tela cheia */
+.smooth-fullscreen-transition {
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Animação fluida e expansiva para entrada em tela cheia (Preencher 100% da tela) */
+@keyframes fullscreenFillExpand {
+  0% {
+    opacity: 0.82;
+    transform: scale(0.88);
+    border-radius: 1.25rem;
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.018);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    border-radius: 0;
+  }
+}
+
+.animate-fullscreen-fill {
+  animation: fullscreenFillExpand 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity, border-radius;
+}
+
+/* Animação Cinematográfica Fluida de Tela Cheia (600ms - Efeito Premium Notável e Confortável) */
+@keyframes photoFullscreenEntrance {
+  0% {
+    opacity: 0.65;
+    transform: scale(0.86);
+    border-radius: 1.25rem;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    border-radius: 0px;
+    box-shadow: none;
+  }
+}
+
+.animate-fullscreen-entrance {
+  animation: photoElasticSpring 0.38s cubic-bezier(0.25, 1, 0.5, 1) both;
+  will-change: transform, opacity, border-radius;
+}
+
+/* True Elastic Spring Animation (Física de Mola Real: Aceleração Rápida, Overshoot Elástico e Retração Amortecida) */
+@keyframes photoElasticSpring {
+  0% {
+    opacity: 0.3;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, calc(var(--anim-dist-scale, 0.92) * 0.9)));
+    transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, calc(var(--anim-dist-scale, 0.92) * 0.9)));
+  }
+  45% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(var(--anim-dist-overshoot, 1.052));
+    transform: translate3d(0, 0, 0) scale(var(--anim-dist-overshoot, 1.052));
+  }
+  72% {
+    -webkit-transform: translate3d(0, 0, 0) scale(0.985);
+    transform: translate3d(0, 0, 0) scale(0.985);
+  }
+  88% {
+    -webkit-transform: translate3d(0, 0, 0) scale(1.006);
+    transform: translate3d(0, 0, 0) scale(1.006);
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@-webkit-keyframes photoElasticSpring {
+  0% {
+    opacity: 0.3;
+    -webkit-transform: translate3d(var(--origin-dx, 0px), var(--origin-dy, 0px), 0) scale(var(--origin-scale, calc(var(--anim-dist-scale, 0.92) * 0.9)));
+  }
+  45% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(var(--anim-dist-overshoot, 1.052));
+  }
+  72% {
+    -webkit-transform: translate3d(0, 0, 0) scale(0.985);
+  }
+  88% {
+    -webkit-transform: translate3d(0, 0, 0) scale(1.006);
+  }
+  100% {
+    opacity: 1;
+    -webkit-transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.animate-photo-elastic {
+  animation: photoElasticSpring 0.35s cubic-bezier(0.25, 1, 0.5, 1) both;
+  will-change: transform, opacity;
+}
+
+/* Smooth mobile momentum scrolling without layer thrashing or blanking */
+.gpu-accelerated-grid {
+  -webkit-overflow-scrolling: touch;
+}
+
+.gpu-album-card {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* GPU Hardware Acceleration & Subpixel Anti-Aliasing (iOS WebKit & Mobile-First) */
+.gpu-accelerated,
+.animate-photo-origin,
+.animate-photo-expand,
+.animate-photo-switch,
+.animate-photo-slide,
+.animate-photo-zoom,
+.animate-photo-elastic,
+.animate-fullscreen-entrance,
+.animate-fullscreen-fill,
+.animate-modal-scale,
+.animate-modal-slide-up,
+.animate-drawer-slide,
+.animate-dock-slide-up,
+.animate-dock-bounce,
+.animate-video-zoom,
+.animate-video-slide-up {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  -webkit-perspective: 1000px;
+  perspective: 1000px;
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+  touch-action: manipulation;
+}

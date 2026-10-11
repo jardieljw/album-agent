@@ -29,6 +29,7 @@ import { translations } from '../../i18n/translations';
 import { FolderSelectModal } from '../common/FolderSelectModal';
 import { SavedRedirectBadge } from '../common/SavedRedirectBadge';
 import { IconBadge } from '../common/IconBadge';
+import { ModalPortal } from '../common/ModalPortal';
 
 interface DiscoveredItem {
   title: string;
@@ -60,6 +61,7 @@ export const MultiAlbumView: React.FC = () => {
   } = useAppStore();
 
   const t = translations[settings.language].multiAlbum || translations['en-US'].multiAlbum;
+  const isEn = settings.language === 'en-US';
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -696,7 +698,7 @@ export const MultiAlbumView: React.FC = () => {
               {/* Folder Destination & Selector */}
               <div className="flex flex-wrap items-center gap-3">
                 <span className="text-xs font-semibold text-slate-400">
-                  {t.saveFolder || 'Salvar na Pasta:'}
+                  {t.saveFolder || (isEn ? "Save to Folder:" : "Salvar na Pasta:")}
                 </span>
                 <div className="relative flex items-center gap-1.5">
                   <input
@@ -776,7 +778,7 @@ export const MultiAlbumView: React.FC = () => {
                   {isSavingBatch ? (
                     <>
                       <Loader2 size={13} className="animate-spin" />
-                      <span>{t.extracting || 'Salvando...'}</span>
+                      <span>{t.extracting || (isEn ? "Saving..." : "Salvando...")}</span>
                     </>
                   ) : (
                     <>
@@ -879,7 +881,7 @@ export const MultiAlbumView: React.FC = () => {
                   }`}
                 >
                   <Compass size={13} className={effectiveTab === 'main' ? 'text-white' : 'text-brand-400'} />
-                  <span>{t.mainAlbums || 'Álbuns Principais'} ({mainAlbums.length})</span>
+                  <span>{t.mainAlbums || (isEn ? "Main Albums" : "Álbuns Principais")} ({mainAlbums.length})</span>
                 </button>
 
                 {/* Tab: Relacionados / Recomendados */}
@@ -1188,28 +1190,30 @@ export const MultiAlbumView: React.FC = () => {
 
       {/* Lightbox Modal para visualizar miniatura sem cortes */}
       {previewImage && (
-        <div
-          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
-          onClick={() => setPreviewImage(null)}
-        >
+        <ModalPortal>
           <div
-            className="relative max-w-4xl max-h-[92vh] bg-surface-elevated border border-border rounded-2xl overflow-hidden p-3 shadow-2xl flex flex-col items-center"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setPreviewImage(null)}
           >
-            <button
-              onClick={() => setPreviewImage(null)}
-              className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/70 text-white/90 hover:bg-black/95 transition-all border border-white/20 shadow-lg"
-              title={t.closeLightbox}
+            <div
+              className="relative max-w-4xl max-h-[92vh] bg-surface-elevated border border-border rounded-2xl overflow-hidden p-3 shadow-2xl flex flex-col items-center"
+              onClick={(e) => e.stopPropagation()}
             >
-              <X className="w-5 h-5" />
-            </button>
-            <img
-              src={`/api/proxy-image?url=${encodeURIComponent(previewImage)}`}
-              alt={t.previewImageAlt || 'Preview'}
-              className="max-h-[85vh] w-auto max-w-full rounded-xl object-contain shadow-inner"
-            />
+              <button
+                onClick={() => setPreviewImage(null)}
+                className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/70 text-white/90 hover:bg-black/95 transition-all border border-white/20 shadow-lg"
+                title={t.closeLightbox}
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <img
+                src={`/api/proxy-image?url=${encodeURIComponent(previewImage)}`}
+                alt={t.previewImageAlt || 'Preview'}
+                className="max-h-[85vh] w-auto max-w-full rounded-xl object-contain shadow-inner"
+              />
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Folder Select Modal for MultiAlbumView */}

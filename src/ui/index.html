@@ -165,11 +165,11 @@
         <section class="control-panel hidden" id="panelLibrary">
             <div class="explorer-toolbar">
                 <div class="explorer-search-group">
-                    <input type="text" id="librarySearchInput" class="explorer-search-input" placeholder=" Pesquisar álbuns por título, link original ou data..." />
+                    <input type="text" id="librarySearchInput" class="explorer-search-input" placeholder=" Search albums by title, original link or date..." />
                     <select id="libraryStatusFilter" class="explorer-filter-select">
                         <option value="all">Todos os Status</option>
                         <option value="resolved">100% 4K Resolvido</option>
-                        <option value="unresolved">Com Não Resolvidos</option>
+                        <option value="unresolved">With Unresolved</option>
                     </select>
                 </div>
 
@@ -193,12 +193,12 @@
 
                     <!-- View Mode Dropdown (Windows Explorer Style) -->
                     <div class="explorer-dropdown-wrapper">
-                        <label for="explorerViewMode" class="explorer-label">Modo de Exibição:</label>
+                        <label for="explorerViewMode" class="explorer-label">View Mode:</label>
                         <select id="explorerViewMode" class="explorer-select">
-                            <option value="grid-lg">Ícones grandes</option>
-                            <option value="grid-xl">Ícones extra grandes</option>
-                            <option value="grid-md">Ícones médios</option>
-                            <option value="grid-sm">Ícones pequenos</option>
+                            <option value="grid-lg">Large Icons</option>
+                            <option value="grid-xl">Extra Large Icons</option>
+                            <option value="grid-md">Medium Icons</option>
+                            <option value="grid-sm">Small Icons</option>
                             <option value="list">Lista</option>
                             <option value="details">Detalhes</option>
                             <option value="tiles">Blocos</option>
@@ -209,7 +209,7 @@
 
             <!-- Library View Container -->
             <div class="library-container grid-lg" id="libraryContainer">
-                <div class="empty-audit">Nenhum álbum salvo em disco ainda. Execute uma extração no Modo 1 ou Modo 2!</div>
+                <div class="empty-audit">No albums saved to disk yet. Execute uma extração no Modo 1 ou Modo 2!</div>
             </div>
         </section>
 
@@ -261,7 +261,7 @@
 
                 <!-- Multi-Album Navigation Bar (Visible when 2+ albums are active) -->
                 <div class="multi-album-nav hidden" id="multiAlbumNav">
-                    <div class="multi-album-label">Álbuns Ativos:</div>
+                    <div class="multi-album-label">Active Albums:</div>
                     <div class="multi-album-tabs" id="multiAlbumTabs"></div>
                 </div>
 
@@ -285,7 +285,7 @@
                                         <button type="button" class="btn-rename-album btn-rename-target" title="Rename album title"> Renomear</button>
                                         <button type="button" class="btn-download-zip btn-zip-target" title="Download all high-res 4K images packaged in a structured ZIP">⬇ Download Full Album (ZIP)</button>
                                         <button type="button" class="btn-export-json btn-json-target" title="Download complete JSON metadata entity"> Export JSON</button>
-                                        <button type="button" class="btn-delete-album btn-delete-target" title="Delete album permanently from disk"> Excluir</button>
+                                        <button type="button" class="btn-delete-album btn-delete-target" title="Delete album permanently from disk"> Delete</button>
                                     </div>
                                 </div>
                                 <div class="provenance-chain hidden album-provenance"></div>
@@ -294,12 +294,12 @@
                             <!-- Active Gallery Explorer View & Sort Controls -->
                             <div class="active-gallery-toolbar">
                                 <div class="gallery-controls-left">
-                                    <span class="gallery-toolbar-label">Exibição:</span>
+                                    <span class="gallery-toolbar-label">View:</span>
                                     <div class="view-buttons-group">
-                                        <button type="button" class="btn-view-mode active" data-mode="grid-lg" title="Ícones grandes"> Grandes</button>
-                                        <button type="button" class="btn-view-mode" data-mode="grid-xl" title="Ícones extra grandes"> Extra Grandes</button>
-                                        <button type="button" class="btn-view-mode" data-mode="grid-md" title="Ícones médios"> Médios</button>
-                                        <button type="button" class="btn-view-mode" data-mode="grid-sm" title="Ícones pequenos">⊞ Pequenos</button>
+                                        <button type="button" class="btn-view-mode active" data-mode="grid-lg" title="Large Icons"> Grandes</button>
+                                        <button type="button" class="btn-view-mode" data-mode="grid-xl" title="Extra Large Icons"> Extra Grandes</button>
+                                        <button type="button" class="btn-view-mode" data-mode="grid-md" title="Medium Icons"> Médios</button>
+                                        <button type="button" class="btn-view-mode" data-mode="grid-sm" title="Small Icons">⊞ Pequenos</button>
                                         <button type="button" class="btn-view-mode" data-mode="list" title="Lista"> Lista</button>
                                         <button type="button" class="btn-view-mode" data-mode="details" title="Detalhes">≣ Detalhes</button>
                                         <button type="button" class="btn-view-mode" data-mode="tiles" title="Blocos"> Blocos</button>
@@ -309,7 +309,7 @@
                                     <label class="gallery-toolbar-label">Ordenar:</label>
                                     <select class="gallery-sort-select explorer-select">
                                         <option value="position">Ordem Original (#)</option>
-                                        <option value="resolution">Maior Resolução (4K)</option>
+                                        <option value="resolution">Highest Resolution (4K)</option>
                                         <option value="status">Status (Resolvidos primeiro)</option>
                                     </select>
                                 </div>
@@ -333,9 +333,9 @@
                     </div>
                     <div class="terminal-actions-group">
                         <button type="button" class="btn-terminal-action btn-terminal-stop hidden" id="btnStopCurrentJob" title="Cancel current background extraction">⏹ Interromper</button>
-                        <button type="button" class="btn-terminal-action" id="btnCopyTerminalLogs" title="Copiar todos os logs para a área de transferência"> Copiar</button>
+                        <button type="button" class="btn-terminal-action" id="btnCopyTerminalLogs" title="Copy all logs to clipboard"> Copiar</button>
                         <button type="button" class="btn-terminal-action" id="btnClearTerminalLogs" title="Limpar console"> Limpar</button>
-                        <button type="button" class="btn-terminal-action active" id="btnToggleAutoScroll" title="Alternar Rolagem Automática">⬇ Auto-scroll</button>
+                        <button type="button" class="btn-terminal-action active" id="btnToggleAutoScroll" title="Toggle Auto-scroll">⬇ Auto-scroll</button>
                     </div>
                 </div>
 
@@ -390,9 +390,9 @@
     <div class="modal hidden" id="renameModal">
         <div class="modal-overlay" id="renameModalOverlay"></div>
         <div class="modal-dialog">
-            <h3> Renomear Álbum</h3>
-            <p class="modal-subtext">O título original coletado do site original permanecerá registrado intacto.</p>
-            <input type="text" id="renameTitleInput" class="rename-input" placeholder="Novo título para o álbum..." />
+            <h3> Rename Album</h3>
+            <p class="modal-subtext">The original title collected from the site will remain intact.</p>
+            <input type="text" id="renameTitleInput" class="rename-input" placeholder="New title for the album..." />
             <div class="modal-actions">
                 <button type="button" class="btn-secondary" id="btnCancelRename">Cancelar</button>
                 <button type="button" class="btn-primary" id="btnConfirmRename">Salvar Nome</button>
@@ -404,11 +404,11 @@
     <div class="modal hidden" id="deleteModal">
         <div class="modal-overlay" id="deleteModalOverlay"></div>
         <div class="modal-dialog">
-            <h3> Excluir Álbum por Completo?</h3>
+            <h3> Delete Entire Album?</h3>
             <p class="modal-subtext">Isso apagará o álbum permanentemente da memória e do disco (<code id="deleteAlbumFilename"></code>).</p>
             <div class="modal-actions">
                 <button type="button" class="btn-secondary" id="btnCancelDelete">Cancelar</button>
-                <button type="button" class="btn-danger" id="btnConfirmDelete">Sim, Excluir Definitivamente</button>
+                <button type="button" class="btn-danger" id="btnConfirmDelete">Sim, Delete Definitivamente</button>
     <!-- Co-Pilot Interactive Modal -->
     <div class="modal hidden" id="copilotModal">
         <div class="modal-overlay" id="copilotModalOverlay"></div>

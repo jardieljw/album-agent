@@ -8,7 +8,15 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 from urllib.parse import urljoin, urlparse
-from playwright.async_api import async_playwright, Playwright, Browser, BrowserContext, Page, Response
+try:
+    from playwright.async_api import async_playwright, Playwright, Browser, BrowserContext, Page, Response
+except ImportError:
+    async_playwright = None
+    Playwright = Any
+    Browser = Any
+    BrowserContext = Any
+    Page = Any
+    Response = Any
 
 try:
     from ..core.network_profiles import (

@@ -14,7 +14,11 @@ from typing import Dict, List, Any, Optional, Tuple, Set
 from urllib.parse import urlparse, urljoin
 from pydantic import BaseModel, Field
 
-from playwright.async_api import Page, Response
+try:
+    from playwright.async_api import Page, Response
+except ImportError:
+    Page = Any
+    Response = Any
 
 from ..core.models import (
     AlbumImage,

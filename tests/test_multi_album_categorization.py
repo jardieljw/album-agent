@@ -46,16 +46,15 @@ def test_is_related_container_detection():
     rel2 = soup.find("a", id="rel-link-2")
     footer_link = soup.find("a", id="footer-link")
 
-    # Primary main content items should NOT be marked as related
     assert MultiAlbumService.is_related_container(main1) is False
     assert MultiAlbumService.is_related_container(main2) is False
 
-    # Sidebar/aside/recommended/related/footer should BE marked as related
     assert MultiAlbumService.is_related_container(rel1) is True
     assert MultiAlbumService.is_related_container(rel2) is True
     assert MultiAlbumService.is_related_container(footer_link) is True
 
-def test_discovered_album_item_source_type():
+
+def test_discovered_album_item_source_type_tagging():
     primary_album = DiscoveredAlbumItem(
         title="Featured Gallery 1",
         url="https://example.com/galleries/featured-gallery-1",
@@ -64,22 +63,21 @@ def test_discovered_album_item_source_type():
     assert primary_album.source_type == "primary"
 
     related_album = DiscoveredAlbumItem(
-        title="Related Collection Album",
+        title="Related Album",
         url="https://example.com/galleries/collection-1",
         source_type="related"
     )
     assert related_album.source_type == "related"
 
+
 def test_is_single_gallery_url():
-    # Galerias individuais com IDs terminais ou hashes canônicos
     assert MultiAlbumService.is_single_gallery_url("https://www.image-platform.com/galleries/urban-architecture-collection-92979511/") is True
-    assert MultiAlbumService.is_single_gallery_url("https://www.media-hub.com/gallery/qsO62k6WubB/Studio-Photography-Showcase/") is True
+    assert MultiAlbumService.is_single_gallery_url("https://www.media-hub.com/gallery/qs062kWubB/Studio-Photography-Showcase/") is True
     assert MultiAlbumService.is_single_gallery_url("https://imgur.com/a/xYz123") is True
-    assert MultiAlbumService.is_single_gallery_url("https://www.artstation.com/artwork/X1Y2Z3") is True
+    assert MultiAlbumService.is_single_gallery_url("https://www.artstation.com/artwork/X1YZ3") is True
     assert MultiAlbumService.is_single_gallery_url("https://danbooru.donmai.us/posts/1234567") is True
     assert MultiAlbumService.is_single_gallery_url("https://example.com/album/12345/") is True
 
-    # Páginas estruturais de índice, diretório, usuário, busca ou categoria
     assert MultiAlbumService.is_single_gallery_url("https://www.image-platform.com/authors/johndoe/") is False
     assert MultiAlbumService.is_single_gallery_url("https://www.media-hub.com/photos/archive-section/") is False
     assert MultiAlbumService.is_single_gallery_url("https://example.com/user/john_doe") is False
@@ -87,6 +85,7 @@ def test_is_single_gallery_url():
     assert MultiAlbumService.is_single_gallery_url("https://example.com/explore") is False
     assert MultiAlbumService.is_single_gallery_url("https://example.com/galleries/summer-vibes/?page=2") is False
     assert MultiAlbumService.is_single_gallery_url("https://example.com/tags/landscape/") is False
+
 
 def test_extract_main_gallery_rejects_google_button_and_extracts_photo():
     sample_html = """
@@ -111,6 +110,7 @@ def test_extract_main_gallery_rejects_google_button_and_extracts_photo():
         </body>
     </html>
     """
+
     url = "https://www.image-platform.com/galleries/urban-architecture-collection-92979511/"
     main_item = MultiAlbumService.extract_main_gallery(sample_html, url)
 
@@ -121,14 +121,11 @@ def test_extract_main_gallery_rejects_google_button_and_extracts_photo():
     assert not main_item.thumbnail_url.endswith(".svg")
     assert main_item.source_type == "primary"
 
+
 def test_google_oauth_button_tag_rejected_by_helpers():
     html_btn = '<a class="google-oauth-button btn-outlined" href="#"><img alt="google" class="google-icon" src="https://static.image-platform.com/style/img/google-icon.svg"><span class="google-text">Login with Google</span></a>'
     soup = BeautifulSoup(html_btn, "html.parser")
     tag_a = soup.find("a")
 
-    # unpack_redirect_url returns empty for '#'
     assert MultiAlbumService.unpack_redirect_url(tag_a["href"], "https://example.com") == ""
-
-    # extract_thumbnail rejects .svg and google-icon
     assert MultiAlbumService.extract_thumbnail(tag_a, "https://example.com") is None
-

@@ -1,5 +1,6 @@
 import React from 'react';
-import { Search, Bell, Menu, Command, Bot, Folder, X, Languages } from 'lucide-react';
+import { Search, Bell, Menu, Command, Bot, Folder, X, Languages, Maximize2, Minimize2 } from 'lucide-react';
+import { toggleDesktopFullscreen, restoreDesktopWindow } from '../../services/desktopService';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../i18n/translations';
 
@@ -102,8 +103,18 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenMobileMenu }) => {
         </button>
       </div>
 
-      {/* Right: Language switch + AI Chat & Notification Bell */}
+      {/* Right: Language switch + Fullscreen Toggle + AI Chat & Notification Bell */}
       <div className="flex items-center gap-2 shrink-0">
+        {/* Toggle Window Fullscreen / Restore Button */}
+        <button
+          onClick={() => toggleDesktopFullscreen()}
+          className="px-2.5 py-1.5 rounded-xl bg-surface-elevated border border-border text-slate-300 hover:text-white hover:border-brand-500/40 transition-all flex items-center gap-1.5 active:scale-95 shadow-sm cursor-pointer"
+          title={settings.language === "en-US" ? "Toggle Fullscreen / Normal Window (F11)" : "Alternar Tela Cheia / Janela Normal (F11)"}
+          aria-label={settings.language === "en-US" ? "Toggle Fullscreen" : "Alternar Tela Cheia"}
+        >
+          <Maximize2 size={14} className="text-brand-400" />
+          <span className="hidden xl:inline text-[11px] font-semibold text-slate-300">{settings.language === "en-US" ? "Fullscreen" : "Tela Cheia"}</span>
+        </button>
         {/* Language Toggle Button */}
         <button
           onClick={() => updateSettings({ language: settings.language === 'en-US' ? 'pt-BR' : 'en-US' })}

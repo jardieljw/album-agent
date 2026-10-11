@@ -46,6 +46,7 @@ export const BatchQueueView: React.FC = () => {
   } = useAppStore();
 
   const t = translations[settings.language].batch;
+  const isEn = settings?.language === 'en-US';
 
   // Form State
   const [inputMode, setInputMode] = useState<'single' | 'multiple'>('single');
@@ -539,7 +540,7 @@ export const BatchQueueView: React.FC = () => {
               {t.emptyQueue}
             </p>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Nenhuma tarefa encontrada para a categoria selecionada. Cole novas URLs no painel acima para iniciar o processamento em lote.
+              {isEn ? 'No tasks found for the selected category. Paste new URLs in the panel above to start batch processing.' : 'Nenhuma tarefa encontrada para a categoria selecionada. Cole novas URLs no painel acima para iniciar o processamento em lote.'}
             </p>
           </div>
         ) : (
@@ -653,7 +654,7 @@ export const BatchQueueView: React.FC = () => {
                   <div className="space-y-1.5 pt-1">
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-slate-300 font-medium truncate max-w-md">
-                        {job.currentStage || 'Processando extração...'}
+                        {job.currentStage || (isEn ? "Processing extraction..." : "Processando extração...")}
                       </span>
                       <span className="font-mono font-bold text-brand-400">
                         {job.progressPercent}%
@@ -679,7 +680,7 @@ export const BatchQueueView: React.FC = () => {
                   <div className="flex items-center justify-between flex-wrap gap-2 pt-1 text-xs text-slate-300 bg-surface/40 p-2.5 rounded-xl border border-white/5">
                     <div className="flex items-center gap-3">
                       <span className="font-semibold text-emerald-400">
-                        {job.resolvedOriginalCount} itens originais
+                        {job.resolvedOriginalCount} {isEn ? "original items" : "itens originais"}
                       </span>
                       {job.durationSeconds > 0 && (
                         <span className="text-slate-400 font-mono">
@@ -697,7 +698,7 @@ export const BatchQueueView: React.FC = () => {
                   <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 flex items-start gap-2">
                     <AlertCircle size={14} className="shrink-0 mt-0.5 text-rose-400" />
                     <span className="truncate">
-                      {job.error || job.currentStage || 'Falha durante o processamento da página.'}
+                      {job.error || job.currentStage || (isEn ? "Failed during page processing." : "Falha durante o processamento da página.")}
                     </span>
                   </div>
                 )}

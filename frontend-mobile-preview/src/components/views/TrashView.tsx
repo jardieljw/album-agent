@@ -25,6 +25,7 @@ import { TrashItem } from '../../types';
 import { formatFileSize } from '../../utils/formatters';
 import { translations } from '../../i18n/translations';
 import { IconBadge } from '../common/IconBadge';
+import { ModalPortal } from '../common/ModalPortal';
 
 export const TrashView: React.FC = () => {
   const {
@@ -46,7 +47,8 @@ export const TrashView: React.FC = () => {
     settings
   } = useAppStore();
 
-  const t = translations[settings.language].trash;
+  const t: any = translations[settings.language].trash || {};
+  const isEn = settings.language === 'en-US';
 
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'size_desc' | 'name_asc'>('date_desc');
   const [isSelectionMode, setIsSelectionMode] = useState<boolean>(false);
@@ -381,7 +383,7 @@ export const TrashView: React.FC = () => {
                 onClick={() => navigateToView('videos')}
                 className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold transition-colors shadow-md shadow-brand-600/20 cursor-pointer"
               >
-                {t.viewVideosGallery || 'Ver Galeria de Vídeos'}
+                {t.viewVideosGallery || (isEn ? 'View Video Gallery' : 'Ver Galeria de Vídeos')}
               </button>
             </div>
           )}
@@ -434,7 +436,7 @@ export const TrashView: React.FC = () => {
                       {item.type === 'video' && <Film size={10} />}
                       {item.type === 'photo' && <ImageIcon size={10} />}
                       {item.type === 'album' && <FolderHeart size={10} />}
-                      <span>{item.type === 'video' ? (t.typeVideo || 'Vídeo') : item.type === 'album' ? (t.typeAlbum || 'Álbum') : (t.typePhoto || 'Foto')}</span>
+                      <span>{item.type === 'video' ? (t.typeVideo || (isEn ? 'Video' : 'Vídeo')) : item.type === 'album' ? (t.typeAlbum || (isEn ? 'Album' : 'Álbum')) : (t.typePhoto || (isEn ? 'Photo' : 'Foto'))}</span>
                     </span>
                   </div>
 
@@ -460,7 +462,7 @@ export const TrashView: React.FC = () => {
                     <button
                       onClick={() => setPreviewingVideoItem(item)}
                       className="absolute inset-0 m-auto w-10 h-10 rounded-full bg-black/60 hover:bg-brand-600/90 text-white flex items-center justify-center backdrop-blur-md border border-white/20 transition-all opacity-80 group-hover:opacity-100 group-hover:scale-110 shadow-lg cursor-pointer"
-                      title={t.previewVideo || 'Pré-visualizar Vídeo'}
+                      title={t.previewVideo || (isEn ? 'Preview Video' : 'Pré-visualizar Vídeo')}
                     >
                       <Play size={18} className="translate-x-0.5" />
                     </button>
@@ -517,160 +519,168 @@ export const TrashView: React.FC = () => {
 
       {/* Confirmation Modal: Empty Entire Trash */}
       {confirmEmptyModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setConfirmEmptyModal(false)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up text-center"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
+            onClick={() => setConfirmEmptyModal(false)}
           >
-            <div className="w-14 h-14 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto shadow-lg shadow-rose-500/10">
-              <AlertTriangle size={30} />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-white">{t.emptyTrashConfirm}</h3>
-              <p className="text-xs sm:text-sm text-slate-400 mt-2 leading-relaxed">
-                {t.emptyTrashWarning}
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                onClick={() => setConfirmEmptyModal(false)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                {t.cancel}
-              </button>
-              <button
-                onClick={handleEmptyTrash}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                {t.emptyTrash}
-              </button>
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-14 h-14 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto shadow-lg shadow-rose-500/10">
+                <AlertTriangle size={30} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">{t.emptyTrashConfirm}</h3>
+                <p className="text-xs sm:text-sm text-slate-400 mt-2 leading-relaxed">
+                  {t.emptyTrashWarning}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  onClick={() => setConfirmEmptyModal(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  onClick={handleEmptyTrash}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {t.emptyTrash}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Confirmation Modal: Single Permanent Delete */}
       {confirmDeleteSingle && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setConfirmDeleteSingle(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up text-center"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
+            onClick={() => setConfirmDeleteSingle(null)}
           >
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
-              <Trash2 size={24} />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-white">{t.confirmDeleteTitle}</h3>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                {t.confirmDeleteDesc.replace('{title}', confirmDeleteSingle.title)}
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                onClick={() => setConfirmDeleteSingle(null)}
-                className="flex-1 py-2 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                {t.cancel}
-              </button>
-              <button
-                onClick={handleSinglePermanentDelete}
-                className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                {t.deletePermanent}
-              </button>
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">{t.confirmDeleteTitle}</h3>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  {t.confirmDeleteDesc.replace('{title}', confirmDeleteSingle.title)}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  onClick={() => setConfirmDeleteSingle(null)}
+                  className="flex-1 py-2 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  onClick={handleSinglePermanentDelete}
+                  className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {t.deletePermanent}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Confirmation Modal: Batch Permanent Delete */}
       {confirmDeleteSelected && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setConfirmDeleteSelected(false)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up text-center"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
+            onClick={() => setConfirmDeleteSelected(false)}
           >
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
-              <Trash2 size={24} />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-white">{t.confirmBatchDeleteTitle.replace('{count}', String(selectedTrashIds.length))}</h3>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                {t.confirmBatchDeleteDesc.replace('{count}', String(selectedTrashIds.length))}
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                onClick={() => setConfirmDeleteSelected(false)}
-                className="flex-1 py-2 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                {t.cancel}
-              </button>
-              <button
-                onClick={handleBatchPermanentDelete}
-                className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                {t.deletePermanent}
-              </button>
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">{t.confirmBatchDeleteTitle.replace('{count}', String(selectedTrashIds.length))}</h3>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  {t.confirmBatchDeleteDesc.replace('{count}', String(selectedTrashIds.length))}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  onClick={() => setConfirmDeleteSelected(false)}
+                  className="flex-1 py-2 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  onClick={handleBatchPermanentDelete}
+                  className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {t.deletePermanent}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Video Preview Modal inside Trash */}
       {previewingVideoItem && (
-        <div
-          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex items-center justify-center p-4 animate-fade-in"
-          onClick={() => setPreviewingVideoItem(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-950 border border-border rounded-3xl overflow-hidden max-w-2xl w-full shadow-2xl space-y-3"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex items-center justify-center p-4 animate-fade-in"
+            onClick={() => setPreviewingVideoItem(null)}
           >
-            <div className="p-4 border-b border-border flex items-center justify-between">
-              <div className="min-w-0">
-                <h4 className="font-bold text-sm text-white truncate">{previewingVideoItem.title}</h4>
-                <p className="text-xs text-slate-400">{previewingVideoItem.original_location}</p>
+            <div
+              className="bg-slate-950 border border-border rounded-3xl overflow-hidden max-w-2xl w-full shadow-2xl space-y-3"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-4 border-b border-border flex items-center justify-between">
+                <div className="min-w-0">
+                  <h4 className="font-bold text-sm text-white truncate">{previewingVideoItem.title}</h4>
+                  <p className="text-xs text-slate-400">{previewingVideoItem.original_location}</p>
+                </div>
+                <button
+                  onClick={() => setPreviewingVideoItem(null)}
+                  className="p-1.5 rounded-xl bg-surface hover:bg-white/10 text-slate-300 transition-colors"
+                >
+                  <X size={18} />
+                </button>
               </div>
-              <button
-                onClick={() => setPreviewingVideoItem(null)}
-                className="p-1.5 rounded-xl bg-surface hover:bg-white/10 text-slate-300 transition-colors"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="aspect-video bg-black flex items-center justify-center">
-              <video
-                src={previewingVideoItem.stream_url}
-                controls
-                autoPlay
-                playsInline
-                className="w-full h-full object-contain"
-              />
-            </div>
-            <div className="p-4 flex items-center justify-end gap-2 border-t border-border">
-              <button
-                onClick={() => {
-                  handleSingleRestore(previewingVideoItem);
-                  setPreviewingVideoItem(null);
-                }}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5"
-              >
-                <RotateCcw size={14} />
-                <span>{t.restoreVideo || 'Restaurar Vídeo'}</span>
-              </button>
+              <div className="aspect-video bg-black flex items-center justify-center">
+                <video
+                  src={previewingVideoItem.stream_url}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <div className="p-4 flex items-center justify-end gap-2 border-t border-border">
+                <button
+                  onClick={() => {
+                    handleSingleRestore(previewingVideoItem);
+                    setPreviewingVideoItem(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5"
+                >
+                  <RotateCcw size={14} />
+                  <span>{t.restoreVideo || (isEn ? 'Restore Video' : 'Restaurar Vídeo')}</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );

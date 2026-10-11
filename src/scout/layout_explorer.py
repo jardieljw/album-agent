@@ -61,14 +61,14 @@ class GeminiLayoutExplorer:
             return None
 
         prompt = f"""
-Você é um engenheiro de Web Scraping de alta precisão.
-Analise o HTML bruto do site '{domain_name}' e descubra como obter o ARQUIVO DIRETO da imagem (.jpg, .png, .webp).
+You are a high-precision Web Scraping engineer.
+Analyze raw HTML for domain '{domain_name}' and identify how to retrieve DIRECT image files (.jpg, .png, .webp).
 
-REGRAS CRÍTICAS:
-- O link final da imagem original NUNCA pode ser uma página HTML de visualização (ex: '/show/', '/view/'). Deve ser o arquivo direto.
-- Se o link no <a> levar para uma subpágina de visualizador interno, defina full_res_method como "subpage" e aponte os seletores.
+CRITICAL RULES:
+- The final URL must NEVER be an HTML viewing page (e.g., '/show/', '/view/'). It must be a direct image file.
+- If the link points to an internal viewing subpage, set full_res_method to "subpage" and identify selectors.
 - Se o link puder ser transformado por regex (ex: trocar 'thumb' por 'orig'), defina como "url_replace".
-- PROIBIDO inventar seletores genéricos com vírgula. Use APENAS classes e IDs existentes no HTML fornecido.
+- FORBIDDEN to invent generic comma-separated selectors. Use ONLY real classes and IDs from provided HTML.
 
 Retorne APENAS um objeto JSON:
 {{
@@ -197,12 +197,12 @@ Retorne APENAS um JSON:
 
         await emit({
             "type": "status",
-            "message": f"Iniciando exploração de layout em {url}...",
+            "message": f"Starting layout exploration on {url}...",
         })
         await emit({
             "type": "ai_thought",
             "stage": "OBSERVATION",
-            "thought": f" [Gemini Layout Explorer] Analisando arquitetura completa de {domain} com {gemini_model}",
+            "thought": f" [Gemini Layout Explorer] Analyzing complete architecture of {domain} with {gemini_model}",
         })
 
         recipes = self.bridge.load_recipes()
@@ -218,12 +218,12 @@ Retorne APENAS um JSON:
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, headers=headers) as client:
             while current_url and page_count < max_pages:
                 if self.is_cancelled:
-                    await emit({"type": "status", "message": "Varredura interrompida pelo operador."})
+                    await emit({"type": "status", "message": "Scan cancelled by operator."})
                     break
 
                 await emit({
                     "type": "status",
-                    "message": f"Raspando página {page_count + 1}: {current_url}",
+                    "message": f"Scraping page {page_count + 1}: {current_url}",
                 })
 
                 try:
@@ -250,7 +250,7 @@ Retorne APENAS um JSON:
                     await emit({
                         "type": "ai_thought",
                         "stage": "SPECULATIVE_PROBING",
-                        "thought": f" [Gemini Scout] Descobrindo receita de layout completa para '{domain}'...",
+                        "thought": f" [Gemini Scout] Discovering layout blueprint for '{domain}'...",
                     })
                     recipe = await self.scout_website_layout(domain, raw_html, model_name=gemini_model)
                     if recipe:
@@ -258,7 +258,7 @@ Retorne APENAS um JSON:
                         await emit({
                             "type": "ai_thought",
                             "stage": "PROVEN_VECTOR",
-                            "thought": f" [Layout Explorer] Receita de layout gerada com sucesso! Container: {recipe.get('gallery_container')}, Card: {recipe.get('item_card')}",
+                            "thought": f" [Layout Explorer] Layout blueprint generated successfully! Container: {recipe.get('gallery_container')}, Card: {recipe.get('item_card')}",
                         })
 
                 # Apply recipe extraction

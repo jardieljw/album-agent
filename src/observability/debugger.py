@@ -67,6 +67,13 @@ class AgentDebugger:
     @staticmethod
     def get_ui_summary(album: Album) -> Dict[str, Any]:
         """Returns clean structured JSON summary for web UI."""
+        def _dump(obj):
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            elif hasattr(obj, "dict"):
+                return obj.dict()
+            return obj
+
         return {
             "album_id": album.album_id,
             "title": album.title,
@@ -76,9 +83,9 @@ class AgentDebugger:
             "cover_image_url": album.cover_image_url,
             "cover_color_palette": getattr(album, "cover_color_palette", None) or (album.images[0].color_palette if album.images and album.images[0].color_palette else None),
             "total_images": len(album.images),
-            "telemetry": album.telemetry.model_dump(),
-            "images": [img.model_dump() for img in album.images],
-            "audit_trails": [audit.model_dump() for audit in album.audit_trails],
+            "telemetry": _dump(album.telemetry) if album.telemetry else {},
+            "images": [_dump(img) for img in album.images],
+            "audit_trails": [_dump(audit) for audit in album.audit_trails],
             "source_origin": getattr(album, "source_origin", None) or (album.metadata.get("source_origin") if isinstance(album.metadata, dict) else None) or "remote",
             "folder": getattr(album, "folder", None) or (album.metadata.get("folder") if isinstance(album.metadata, dict) else None) or "Geral",
             "tags": getattr(album, "tags", []) or [],

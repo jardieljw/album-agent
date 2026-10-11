@@ -1,3 +1,4 @@
+import { toggleDesktopFullscreen, restoreDesktopWindow, exitAllFullscreen } from './services/desktopService';
 import React, { useEffect, useState, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useAppStore } from './store/useAppStore';
@@ -19,6 +20,11 @@ import { KeybindingsModal } from './components/common/KeybindingsModal';
 import { VideoPlayerModal } from './components/common/VideoPlayerModal';
 import { FolderModal } from './components/common/FolderModal';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import {
+  getViewTransitionClass,
+  getSpeedClass,
+  getDistanceClass
+} from './services/motionConfig';
 
 // Dedicated Views
 import { HomeView } from './components/views/HomeView';
@@ -27,7 +33,6 @@ import { MultiAlbumView } from './components/views/MultiAlbumView';
 import { WebVideoScraperView } from './components/views/WebVideoScraperView';
 import { BatchQueueView } from './components/views/BatchQueueView';
 import { LiveMonitorView } from './components/views/LiveMonitorView';
-import { TeachingView } from './components/views/TeachingView';
 import { GalleryView } from './components/views/GalleryView';
 import { VideosView } from './components/views/VideosView';
 import { TrashView } from './components/views/TrashView';
@@ -59,6 +64,20 @@ export const App: React.FC = () => {
     activeAlbumId
   });
 
+  // Global safety keyboard listener for F11 and Escape (garante que nunca fique preso em tela cheia)
+  useEffect(() => {
+    const handleGlobalKeys = (e: KeyboardEvent) => {
+      if (e.key === 'F11') {
+        e.preventDefault();
+        toggleDesktopFullscreen();
+      } else if (e.key === 'Escape') {
+        exitAllFullscreen();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeys);
+    return () => window.removeEventListener('keydown', handleGlobalKeys);
+  }, []);
+
   // Sync initial tab from URL hash on load (e.g. /#/videos, /#/gallery, /#/extractor)
   useEffect(() => {
     const parseHash = () => {
@@ -74,7 +93,7 @@ export const App: React.FC = () => {
       }
 
       const validViews = [
-        'home', 'extractor', 'multi-album', 'web-video-scraper', 'batch-queue', 'live-monitor', 'teaching', 'gallery',
+        'home', 'extractor', 'multi-album', 'web-video-scraper', 'batch-queue', 'live-monitor', 'gallery',
         'videos', 'trash', 'duplicates', 'domain-patterns', 'job-history',
         'realtime-logs', 'performance-metrics', 'settings'
       ];
@@ -124,8 +143,6 @@ export const App: React.FC = () => {
         return <BatchQueueView />;
       case 'live-monitor':
         return <LiveMonitorView />;
-      case 'teaching':
-        return <TeachingView />;
       case 'gallery':
         return <GalleryView />;
       case 'videos':
@@ -170,7 +187,12 @@ export const App: React.FC = () => {
           className="flex-1 overflow-y-auto relative touch-scroll pb-6"
         >
           <ErrorBoundary>
-            {renderActiveView()}
+            <div
+              key={`${currentView}-${activeTabId}`}
+              className={`${getViewTransitionClass(settings.viewTransitionAnimation || 'fade', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')} min-h-full w-full`}
+            >
+              {renderActiveView()}
+            </div>
           </ErrorBoundary>
         </main>
 
@@ -195,9 +217,9 @@ export const App: React.FC = () => {
                 <AlertTriangle size={32} />
               </div>
               <div className="space-y-1.5">
-                <h3 className="text-base sm:text-lg font-bold text-white">Falha no Reprodutor de Vídeo</h3>
+                <h3 className="text-base sm:text-lg font-bold text-white">{useAppStore.getState().settings.language === "en-US" ? "Video Player Error" : "Falha no Reprodutor de Vídeo"}</h3>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Ocorreu um erro inesperado no reprodutor de vídeo. A navegação do app permanece ativa e funcional.
+                  {useAppStore.getState().settings.language === "en-US" ? "An unexpected error occurred in the video player. App navigation remains active and functional." : "Ocorreu um erro inesperado no reprodutor de vídeo. A navegação do app permanece ativa e funcional."}
                 </p>
               </div>
               <button

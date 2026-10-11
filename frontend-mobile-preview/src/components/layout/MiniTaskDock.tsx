@@ -16,6 +16,11 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../i18n/translations';
+import {
+  getTaskDockAnimationClass,
+  getSpeedClass,
+  getDistanceClass
+} from '../../services/motionConfig';
 import { ExtractionJob } from '../../types';
 
 export const MiniTaskDock: React.FC = () => {
@@ -39,6 +44,7 @@ export const MiniTaskDock: React.FC = () => {
 
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const t = translations[settings.language]?.dock || translations['en-US'].dock;
+  const isEn = settings.language === 'en-US';
 
   // Mutually exclusive job classification predicates
   const isJobQueued = (j: ExtractionJob): boolean =>
@@ -135,7 +141,7 @@ export const MiniTaskDock: React.FC = () => {
       <>
         {/* MOBILE: Circular floating button only (< 768px) */}
         <div
-          className="md:hidden fixed right-3.5 z-40 animate-fade-in"
+          className={`md:hidden fixed right-3.5 z-40 ${getTaskDockAnimationClass(settings.taskDockAnimation || 'slide-up', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}
           style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))' }}
         >
           <button
@@ -165,7 +171,7 @@ export const MiniTaskDock: React.FC = () => {
         </div>
 
         {/* DESKTOP: Sleek horizontal pill (>= 768px) */}
-        <div className="hidden md:flex fixed bottom-4 right-4 z-40 animate-fade-in">
+        <div className={`hidden md:flex fixed bottom-4 right-4 z-40 ${getTaskDockAnimationClass(settings.taskDockAnimation || 'slide-up', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}>
           <button
             onClick={() => setDockMinimized(false)}
             className="glass-panel-elevated rounded-full py-2.5 px-4 flex items-center gap-2.5 border border-brand-500/40 shadow-2xl bg-surface/95 backdrop-blur-xl hover:border-brand-400 hover:scale-105 active:scale-95 transition-all text-xs font-semibold text-slate-200 group"
@@ -204,7 +210,7 @@ export const MiniTaskDock: React.FC = () => {
   // 2. Expanded View: Sleek Modern Tabbed Dock
   return (
     <div
-      className="fixed left-3 right-3 md:left-68 md:right-4 md:bottom-4 z-40 animate-fade-in"
+      className={`fixed left-3 right-3 md:left-68 md:right-4 md:bottom-4 z-40 ${getTaskDockAnimationClass(settings.taskDockAnimation || 'slide-up', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}
       style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0.75rem))' }}
     >
       <div className="glass-panel-elevated rounded-2xl p-2.5 sm:p-3 sm:px-4 flex flex-col gap-2 border border-brand-500/30 shadow-2xl bg-surface/95 backdrop-blur-xl">
@@ -256,7 +262,7 @@ export const MiniTaskDock: React.FC = () => {
                     />
                     <span className="truncate max-w-[100px] sm:max-w-[140px]">{j.title}</span>
                     <span className="font-mono text-[9px] text-slate-400">
-                      {isJobComp ? '100%' : isJobFail ? 'Falhou' : isJobCanc ? 'Cancelado' : isJobQue ? t.inQueuePill : isJobPau ? t.paused : `${pillProgress}%`}
+                      {isJobComp ? '100%' : isJobFail ? (isEn ? 'Failed' : 'Falhou') : isJobCanc ? (isEn ? 'Cancelled' : 'Cancelado') : isJobQue ? t.inQueuePill : isJobPau ? t.paused : `${pillProgress}%`}
                     </span>
                   </button>
 
@@ -320,9 +326,9 @@ export const MiniTaskDock: React.FC = () => {
                   {isCompleted
                     ? (isVideo ? t.videoCompleted : t.albumCompleted)
                     : isFailed
-                    ? 'Falhou'
+                    ? (isEn ? 'Failed' : 'Falhou')
                     : isCancelled
-                    ? 'Cancelado'
+                    ? (isEn ? 'Cancelled' : 'Cancelado')
                     : isQueued
                     ? t.queued
                     : isPaused
@@ -473,6 +479,22 @@ export const MiniTaskDock: React.FC = () => {
                 title={isQueued ? t.removeFromQueue : t.cancelTask}
               >
                 {t.cancel}
+              </button>
+            )}
+
+            {/* Dismiss Button when task is already Cancelled or Failed */}
+            {(isCancelled || isFailed) && (
+              <button
+                onClick={() => {
+                  dismissDockJob(focusedJob.id);
+                  if (selectedJobId === focusedJob.id) {
+                    setSelectedJobId(null);
+                  }
+                }}
+                className="px-1.5 sm:px-2.5 py-1.5 rounded-lg bg-surface-elevated hover:bg-surface-hover text-slate-300 border border-border text-[10px] sm:text-[11px] font-semibold transition-colors whitespace-nowrap"
+                title={isEn ? "Dismiss from downloads dock" : "Fechar da barra de downloads"}
+              >
+                {isEn ? 'Dismiss' : 'Fechar'}
               </button>
             )}
 

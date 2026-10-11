@@ -20,20 +20,28 @@ data/video_folders.json
 data/domain_cookies.json
 data/temp_zips/
 data/trash/
+data/cache/
 *.part
 *.ytdl
 data/*.tmp
 data/*.cache
+data/cache/*
 !data/albums/.gitkeep
 !data/videos/.gitkeep
 
-# Root-level debug/test scripts (not part of the app)
+# Root-level debug/test scripts and temporary folders
 find_box.py
 print_buttons.py
 /test_*.py
 probe_*.json
 gallery_render_html.txt
 mock-preview/
+APP FIX/
+benchmark_*.json
+benchmark_*.py
+test_prewarm_verification.py
+diagnose_lightbox_experience.py
+tests/benchmark_top6.py
 
 # Python cache & virtual environments
 __pycache__/

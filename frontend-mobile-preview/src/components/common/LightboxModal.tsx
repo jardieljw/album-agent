@@ -9,7 +9,6 @@ import {
   Info,
   Sparkles,
   Sliders,
-  Columns,
   Star,
   MapPin,
   FileText,
@@ -44,14 +43,20 @@ export const LightboxModal: React.FC = () => {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [splitPos, setSplitPos] = useState(50); // 0 to 100%
-  const [showSplitCompare, setShowSplitCompare] = useState(false);
   const [showInfoDrawer, setShowInfoDrawer] = useState(false);
   const [copiedHex, setCopiedHex] = useState<string | null>(null);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCoverUpdating, setIsCoverUpdating] = useState(false);
   const [imagePalette, setImagePalette] = useState<string[]>(lightboxImage?.colorPalette || []);
+  const [glacierBg, setGlacierBg] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('imagex_lightbox_glacier');
+      return saved !== null ? saved === 'true' : true;
+    } catch (_) {
+      return true;
+    }
+  });
 
   useEffect(() => {
     if (!lightboxImage) return;
@@ -224,12 +229,18 @@ export const LightboxModal: React.FC = () => {
  else if (e.key.toLowerCase() === 'z') {
         setZoom(z => (z === 1 ? 2.5 : 1));
         setPan({ x: 0, y: 0 });
-      } else if (e.key.toLowerCase() === 'c') {
-        setShowSplitCompare(s => !s);
       } else if (e.key.toLowerCase() === 'd') {
         handleDownload();
       } else if (e.key.toLowerCase() === 'f') {
         toggleFullscreen();
+      } else if (e.key.toLowerCase() === 'g') {
+        setGlacierBg(prev => {
+          const next = !prev;
+          try {
+            localStorage.setItem('imagex_lightbox_glacier', String(next));
+          } catch (_) {}
+          return next;
+        });
       }
     };
 
@@ -259,6 +270,10 @@ export const LightboxModal: React.FC = () => {
     lightboxImage.format === 'webp' ||
     /\.(gif|webp)(\?|$)/i.test(lightboxImage.originalUrl || '') ||
     /\.(gif|webp)(\?|$)/i.test(lightboxImage.thumbnailUrl || '');
+
+  const ambientBgUrl = isVideoItem
+    ? (lightboxImage.thumbnailUrl || lightboxImage.rawThumbnailUrl)
+    : (lightboxImage.previewUrl || lightboxImage.originalUrl || lightboxImage.rawOriginalUrl || lightboxImage.thumbnailUrl);
 
   const handleNext = () => {
     if (albumImages.length === 0) return;
@@ -369,9 +384,25 @@ export const LightboxModal: React.FC = () => {
   };
 
   return (
-    <div className={`fixed inset-0 h-[100dvh] max-h-[100dvh] select-none animate-fade-in flex flex-col ${
-      isFullscreen ? 'z-[999] bg-black w-screen h-screen max-w-screen max-h-screen' : 'z-50 bg-black/95 backdrop-blur-2xl'
+    <div className={`fixed inset-0 h-[100dvh] max-h-[100dvh] select-none animate-fade-in flex flex-col bg-black overflow-hidden ${
+      isFullscreen ? 'z-[999] w-screen h-screen max-w-screen max-h-screen' : 'z-50'
     }`}>
+      {/* Ambient Glacier Frosted Glass Background Layer */}
+      {glacierBg && ambientBgUrl && (
+        <div className="absolute inset-0 pointer-events-none select-none overflow-hidden z-0">
+          <img
+            key={`glacier-ambient-${lightboxImage.id || ambientBgUrl}`}
+            src={ambientBgUrl}
+            alt=""
+            aria-hidden="true"
+            className="w-full h-full object-cover scale-125 filter blur-[75px] sm:blur-[95px] saturate-[1.6] opacity-45 transform transition-opacity duration-700 ease-out pointer-events-none select-none"
+          />
+          {/* Dark Contrast / Vignette Gradient Overlays */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/80 pointer-events-none" />
+          <div className="absolute inset-0 bg-black/25 pointer-events-none" />
+        </div>
+      )}
+
       {/* Floating Exit Fullscreen Button */}
       {isFullscreen && (
         <button
@@ -429,22 +460,6 @@ export const LightboxModal: React.FC = () => {
             }`}
           >
 
-            {/* Split Comparator (Only for still images) */}
-            {!isVideoItem && (
-              <button
-                onClick={() => setShowSplitCompare(!showSplitCompare)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
-                  showSplitCompare
-                    ? 'bg-brand-500 text-white shadow-glow-brand ring-2 ring-brand-400/50'
-                    : 'bg-white/10 hover:bg-white/20 text-slate-200'
-                }`}
-                title={t.splitCompare}
-              >
-                <Columns size={14} className="shrink-0" />
-                <span>{t.splitCompare}</span>
-              </button>
-            )}
-
             {/* Zoom In/Out Controls */}
             <div className="flex items-center gap-1 px-2 py-1 rounded-xl bg-white/10 shrink-0">
               <button
@@ -474,6 +489,26 @@ export const LightboxModal: React.FC = () => {
             >
               <Play size={13} className="fill-current shrink-0" />
               <span>{t.slideshow}</span>
+            </button>
+
+            {/* Glacier Ambient Lighting Mode Toggle */}
+            <button
+              onClick={() => {
+                const next = !glacierBg;
+                setGlacierBg(next);
+                try {
+                  localStorage.setItem('imagex_lightbox_glacier', String(next));
+                } catch (_) {}
+              }}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 shadow-sm ${
+                glacierBg
+                  ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.35)] ring-1 ring-cyan-400/40'
+                  : 'bg-white/10 border-white/10 text-slate-400 hover:text-white hover:bg-white/15'
+              }`}
+              title={glacierBg ? (t.glacierBgActive || 'Fundo Glasier Ativado (G)') : (t.glacierBgDisabled || 'Ativar Fundo Glasier (G)')}
+            >
+              <Sparkles size={13} className={glacierBg ? 'text-cyan-300 animate-pulse' : 'text-slate-400'} />
+              <span className="hidden sm:inline">{t.glacierBg || 'Fundo Glasier'}</span>
             </button>
 
             {/* Fullscreen Toggle Button */}
@@ -551,7 +586,7 @@ export const LightboxModal: React.FC = () => {
       )}
 
       {/* Main Viewport Area */}
-      <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden relative w-full">
+      <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden relative w-full z-10">
         {/* Canvas Center Area */}
         <div
           className="flex-1 min-h-0 min-w-0 w-full h-full relative flex items-center justify-center overflow-hidden p-2 sm:p-4 cursor-grab active:cursor-grabbing"
@@ -562,51 +597,7 @@ export const LightboxModal: React.FC = () => {
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
         >
-          {/* Split Resolution Comparator Mode (Images only) */}
-          {showSplitCompare && !isVideoItem ? (
-            <div className="relative max-w-4xl max-h-full w-full h-full min-h-0 min-w-0 flex items-center justify-center p-2 sm:p-4">
-              <div className="relative overflow-hidden rounded-2xl sm:rounded-3xl border border-white/20 shadow-2xl max-h-full max-w-full flex items-center justify-center">
-                {/* Original High-Res Original (Bottom) */}
-                <img
-                  src={lightboxImage.originalUrl}
-                  alt="Resolução Original"
-                  className="max-h-full max-w-full w-auto h-auto object-contain pointer-events-none select-none"
-                />
-
-                {/* Web Thumbnail (Top Clipped with authentic pixels) */}
-                <img
-                  src={lightboxImage.thumbnailUrl}
-                  alt="Source Thumbnail"
-                  className="absolute inset-0 w-full h-full object-contain pointer-events-none select-none"
-                  style={{ clipPath: `inset(0 ${100 - splitPos}% 0 0)` }}
-                />
-
-                {/* Vertical Divider Line */}
-                <div
-                  className="absolute inset-y-0 w-0.5 bg-brand-400 pointer-events-none shadow-glow-brand"
-                  style={{ left: `${splitPos}%` }}
-                />
-
-                <div className="absolute top-3 left-3 px-2.5 py-1 rounded-xl bg-black/80 backdrop-blur-md text-[10px] font-mono text-amber-400 font-bold border border-amber-500/30 shadow-lg pointer-events-none">
-                  Origem da Página (Miniatura)
-                </div>
-
-                <div className="absolute top-3 right-3 px-2.5 py-1 rounded-xl bg-black/80 backdrop-blur-md text-[10px] font-mono text-emerald-400 font-bold border border-emerald-500/30 shadow-lg pointer-events-none">
-                  Original Descoberto ({lightboxImage.width}×{lightboxImage.height})
-                </div>
-
-                {/* Slider Handle */}
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={splitPos}
-                  onChange={e => setSplitPos(Number(e.target.value))}
-                  className="absolute inset-x-0 bottom-5 w-3/4 mx-auto cursor-ew-resize z-30"
-                />
-              </div>
-            </div>
-          ) : isVideoItem ? (
+          {isVideoItem ? (
             /* Full Native Video Player Surface */
             <div
               className={`${

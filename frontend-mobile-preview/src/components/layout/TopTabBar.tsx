@@ -11,7 +11,7 @@ export const TopTabBar: React.FC = () => {
     const s = translations[settings.language]?.sidebar || translations['en-US'].sidebar;
     const h = translations[settings.language]?.header || translations['en-US'].header;
     if (tab.id === 'tab-home-default') {
-      return s.home || 'Início';
+      return s.home || (settings.language === 'en-US' ? 'Home' : 'Início');
     }
     if (tab.viewId === 'home') {
       if (tab.title === 'Nova Aba' || tab.title === 'New Tab') {
@@ -27,7 +27,6 @@ export const TopTabBar: React.FC = () => {
       case 'multi-album': return s.multiAlbum;
       case 'web-video-scraper': return s.webVideoScraper;
       case 'batch-queue': return s.batchProcessor;
-      case 'teaching': return s.aiRefiner;
       case 'gallery': return s.albumLibrary;
       case 'videos': return s.videoGallery;
       case 'live-monitor': return s.aiLiveMonitor;

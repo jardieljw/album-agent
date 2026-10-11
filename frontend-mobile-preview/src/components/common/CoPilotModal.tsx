@@ -4,7 +4,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { backendApi } from '../../services/realApi';
 
 export const CoPilotModal: React.FC = () => {
-  const { coPilotOpen, setCoPilotOpen, setOfMarks, activeJob } = useAppStore();
+  const { coPilotOpen, setCoPilotOpen, setOfMarks, activeJob, settings } = useAppStore();
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(1);
   const [userHint, setUserHint] = useState('');
   const [isResolved, setIsResolved] = useState(false);
@@ -46,8 +46,8 @@ export const CoPilotModal: React.FC = () => {
               <Bot size={18} />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-slate-100">Co-Pilot de Intervenção Humana</h3>
-              <p className="text-[11px] text-slate-400">O agente precisa de validação para classificar elementos ambíguos na página</p>
+              <h3 className="font-bold text-sm text-slate-100">{settings.language === "en-US" ? "Human Intervention Co-Pilot" : "Co-Pilot de Intervenção Humana"}</h3>
+              <p className="text-[11px] text-slate-400">{settings.language === "en-US" ? "The agent requires validation to classify ambiguous page elements" : "O agente precisa de validação para classificar elementos ambíguos na página"}</p>
             </div>
           </div>
           <button onClick={() => setCoPilotOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200">
@@ -59,7 +59,7 @@ export const CoPilotModal: React.FC = () => {
           <div className="p-3.5 rounded-xl bg-brand-950/40 border border-brand-500/30 text-brand-200 flex items-start gap-2.5">
             <Sparkles size={16} className="text-brand-400 flex-shrink-0 mt-0.5" />
             <p className="leading-relaxed">
-              <strong>Pergunta do Agente:</strong> "Identifiquei 4 cards nesta seção do fórum. Qual deles representa o álbum original em vez de avatares ou anúncios?"
+              <strong>{settings.language === "en-US" ? "Agent Question:" : "Pergunta do Agente:"}</strong> {settings.language === "en-US" ? '"I identified 4 cards in this forum section. Which one represents the original album rather than avatars or ads?"' : '"Identifiquei 4 cards nesta seção do fórum. Qual deles representa o álbum original em vez de avatares ou anúncios?"'}
             </p>
           </div>
 
@@ -91,7 +91,7 @@ export const CoPilotModal: React.FC = () => {
               type="text"
               value={userHint}
               onChange={e => setUserHint(e.target.value)}
-              placeholder="Ou digite uma instrução para o agente (ex: ignore links de avatars)..."
+              placeholder={settings.language === "en-US" ? "Or type an instruction for the agent (e.g. ignore avatar links)..." : "Ou digite uma instrução para o agente (ex: ignore links de avatars)..."}
               className="flex-1 px-3.5 py-2 rounded-xl bg-surface-elevated border border-border text-slate-200 text-xs outline-none focus:border-brand-500"
             />
             <button
@@ -99,7 +99,7 @@ export const CoPilotModal: React.FC = () => {
               className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-glow-brand"
             >
               {isResolved ? <Check size={14} /> : <Send size={14} />}
-              <span>Confirmar Seleção</span>
+              <span>{settings.language === "en-US" ? "Confirm Selection" : "Confirmar Seleção"}</span>
             </button>
           </div>
         </div>

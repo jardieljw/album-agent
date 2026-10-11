@@ -27,6 +27,12 @@ import { useAppStore } from '../../store/useAppStore';
 import { formatFileSize } from '../../utils/formatters';
 import { translations } from '../../i18n/translations';
 import { IconBadge } from './IconBadge';
+import {
+  getVideoPlayerAnimationClass,
+  getSpeedClass,
+  getDistanceClass
+} from '../../services/motionConfig';
+import { isDesktopApp, toggleAppFullscreen, exitAllFullscreen } from '../../services/desktopService';
 
 export const VideoPlayerModal: React.FC = () => {
   const {
@@ -39,6 +45,7 @@ export const VideoPlayerModal: React.FC = () => {
     addNotification,
     settings
   } = useAppStore();
+  const isEn = settings?.language === 'en-US';
 
   const t = translations[settings.language]?.videoPlayer || translations['en-US'].videoPlayer;
 
@@ -53,6 +60,7 @@ export const VideoPlayerModal: React.FC = () => {
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [fitMode, setFitMode] = useState<'contain' | 'cover'>('contain');
   const [showControls, setShowControls] = useState<boolean>(true);
   const [showSpeedMenu, setShowSpeedMenu] = useState<boolean>(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState<boolean>(false);
@@ -69,6 +77,7 @@ export const VideoPlayerModal: React.FC = () => {
 
       if (e.key === 'Escape') {
         e.preventDefault();
+        exitAllFullscreen(setIsFullscreen);
         setActivePlayingVideo(null);
       } else if (e.key === ' ' || e.key === 'k' || e.key === 'K') {
         e.preventDefault();
@@ -88,7 +97,10 @@ export const VideoPlayerModal: React.FC = () => {
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
         handleToggleMute();
-      } else if (e.key === 'f' || e.key === 'F') {
+      } else if (e.key === 'p' || e.key === 'P' || e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        setFitMode(m => (m === 'contain' ? 'cover' : 'contain'));
+      } else if (e.key === 'f' || e.key === 'F' || e.key === 'F11') {
         e.preventDefault();
         handleToggleFullscreen();
       }
@@ -209,7 +221,7 @@ export const VideoPlayerModal: React.FC = () => {
         if (data.fatal) {
           console.error("Fatal Hls.js error:", data);
           setIsLoading(false);
-          setVideoError("Não foi possível carregar o fluxo HLS. Tente reproduzir via proxy seguro.");
+          setVideoError(t.hlsError || "Could not load HLS stream. Try playing via secure proxy.");
         }
       });
       hlsRef.current = hls;
@@ -258,6 +270,7 @@ export const VideoPlayerModal: React.FC = () => {
       video.removeEventListener('webkitendfullscreen', handleWebkitEnd);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      exitAllFullscreen();
     };
   }, [activePlayingVideo]);
 
@@ -317,74 +330,7 @@ export const VideoPlayerModal: React.FC = () => {
   };
 
   const handleToggleFullscreen = async () => {
-    const video = videoRef.current;
-    const container = containerRef.current;
-
-    // 1. If currently in native DOM fullscreen, exit it
-    if (document.fullscreenElement || (document as any).webkitFullscreenElement) {
-      try {
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if ((document as any).webkitExitFullscreen) {
-          await (document as any).webkitExitFullscreen();
-        }
-      } catch (err) {
-        console.warn('Exit fullscreen error:', err);
-      }
-      setIsFullscreen(false);
-      return;
-    }
-
-    // 2. If in pseudo or webkit fullscreen, toggle off
-    if (isFullscreen) {
-      if (video && typeof (video as any).webkitExitFullscreen === 'function') {
-        try {
-          (video as any).webkitExitFullscreen();
-        } catch {}
-      }
-      setIsFullscreen(false);
-      return;
-    }
-
-    // 3. On iOS (iPhone / iPad), HTMLVideoElement.webkitEnterFullscreen() is the native way
-    const isIOS =
-      typeof navigator !== 'undefined' &&
-      (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
-
-    if (isIOS && video && typeof (video as any).webkitEnterFullscreen === 'function') {
-      try {
-        (video as any).webkitEnterFullscreen();
-        setIsFullscreen(true);
-        return;
-      } catch (err) {
-        console.warn('iOS webkitEnterFullscreen failed, falling back to viewport expansion:', err);
-      }
-    }
-
-    // 4. Try standard container.requestFullscreen() or webkitRequestFullscreen()
-    if (container) {
-      if (typeof container.requestFullscreen === 'function') {
-        try {
-          await container.requestFullscreen();
-          setIsFullscreen(true);
-          return;
-        } catch (err) {
-          console.warn('container.requestFullscreen failed:', err);
-        }
-      } else if (typeof (container as any).webkitRequestFullscreen === 'function') {
-        try {
-          await (container as any).webkitRequestFullscreen();
-          setIsFullscreen(true);
-          return;
-        } catch (err) {
-          console.warn('container.webkitRequestFullscreen failed:', err);
-        }
-      }
-    }
-
-    // 5. Fallback: Seamless CSS full viewport expansion (100dvh edge-to-edge)
-    setIsFullscreen(true);
+    await toggleAppFullscreen(isFullscreen, setIsFullscreen);
   };
 
   const handleTogglePiP = async () => {
@@ -400,15 +346,34 @@ export const VideoPlayerModal: React.FC = () => {
     }
   };
 
+  const HIDE_TIMEOUT_MS = 2500;
+
   const handleMouseMove = () => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     if (isPlaying && !videoRef.current?.paused) {
       controlsTimeoutRef.current = setTimeout(() => {
         if (isPlaying && !videoRef.current?.paused) setShowControls(false);
-      }, 4000);
+      }, HIDE_TIMEOUT_MS);
     }
   };
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handleActivity = () => handleMouseMove();
+    window.addEventListener('mousemove', handleActivity, { passive: true });
+    window.addEventListener('pointermove', handleActivity, { passive: true });
+    window.addEventListener('keydown', handleActivity, { passive: true });
+    window.addEventListener('wheel', handleActivity, { passive: true });
+    window.addEventListener('touchstart', handleActivity, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('pointermove', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      window.removeEventListener('wheel', handleActivity);
+      window.removeEventListener('touchstart', handleActivity);
+    };
+  }, [isFullscreen, isPlaying]);
 
   const formatTime = (seconds: number): string => {
     if (isNaN(seconds) || seconds < 0) return '00:00';
@@ -479,7 +444,7 @@ export const VideoPlayerModal: React.FC = () => {
           }
           addNotification({
             title: 'Stream Renovado',
-            message: 'O link de reprodução do vídeo foi renovado com sucesso.',
+            message: t.streamRenewSuccess || "Video playback link renewed successfully.",
             type: 'success'
           });
         }
@@ -495,8 +460,8 @@ export const VideoPlayerModal: React.FC = () => {
     } catch (err) {
       console.warn("Error renewing stream in modal:", err);
       addNotification({
-        title: 'Erro na Renovação',
-        message: 'Não foi possível renovar o stream.',
+        title: t.streamRenewErrorTitle || "Renewal Error",
+        message: t.streamRenewErrorMsg || "Could not renew stream.",
         type: 'error'
       });
     } finally {
@@ -508,36 +473,40 @@ export const VideoPlayerModal: React.FC = () => {
 
   return (
     <div
-      className={`fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 select-none animate-fade-in`}
+      className={`fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center ${
+        isFullscreen ? 'p-0' : 'p-2 sm:p-4 md:p-6'
+      } select-none animate-fade-in`}
       onClick={(e) => {
         if (e.target === e.currentTarget && !isFullscreen) setActivePlayingVideo(null);
       }}
     >
-      {/* Permanent Emergency Exit Button (always available in any state) */}
-      <button
-        type="button"
-        onClick={() => setActivePlayingVideo(null)}
-        className="fixed top-3 right-3 sm:top-5 sm:right-5 z-[9999] p-2.5 sm:p-3 rounded-full bg-black/80 hover:bg-rose-600 text-white border border-white/20 backdrop-blur-md shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center"
-        title={t.close || 'Fechar Vídeo (Esc)'}
-        aria-label={t.closeAria || 'Fechar Reprodutor de Vídeo'}
-      >
-        <X size={20} strokeWidth={2.5} />
-      </button>
+      {/* Permanent Emergency Exit Button (only in windowed mode) */}
+      {!isFullscreen && (
+        <button
+          type="button"
+          onClick={() => setActivePlayingVideo(null)}
+          className="fixed top-3 right-3 sm:top-5 sm:right-5 z-[9999] p-2.5 sm:p-3 rounded-full bg-black/80 hover:bg-rose-600 text-white border border-white/20 backdrop-blur-md shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center"
+          title={t.close || "Close Video (Esc)"}
+          aria-label={t.closeAria || "Close Video Player"}
+        >
+          <X size={20} strokeWidth={2.5} />
+        </button>
+      )}
 
       <div
         ref={containerRef}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => isPlaying && setShowControls(false)}
-        className={`relative bg-slate-950 overflow-hidden flex flex-col justify-between transition-all duration-200 ${
+        className={`relative bg-black overflow-hidden flex flex-col justify-between ${getVideoPlayerAnimationClass(settings.videoPlayerAnimation || 'zoom', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')} transition-all duration-300 ease-out ${
           isFullscreen
-            ? 'fixed inset-0 z-[60] w-full h-[100dvh] max-w-none max-h-none rounded-none aspect-auto border-0'
+            ? 'fixed inset-0 z-[9999] w-full h-full max-w-none max-h-none rounded-none aspect-auto border-0 shadow-none'
             : 'w-full max-w-5xl h-[85vh] sm:h-[80vh] rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-700 ring-1 ring-white/10'
-        }`}
+        } ${isFullscreen && !showControls ? 'fullscreen-cursor-hidden cursor-none' : 'cursor-default'}`}
       >
         {/* Top Header Bar */}
         <div
-          className={`absolute top-0 left-0 right-0 z-30 p-3 sm:p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between transition-opacity duration-300 ${
-            (showControls || !isPlaying || !!videoError) ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+          className={`absolute top-0 left-0 right-0 z-30 p-3 sm:p-4 bg-gradient-to-b from-black/90 via-black/50 to-transparent flex items-center justify-between transition-all duration-500 ease-out ${
+            (showControls || !isPlaying || !!videoError) ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 -translate-y-12 pointer-events-none'
           }`}
           onClick={(e) => e.stopPropagation()}
         >
@@ -564,10 +533,10 @@ export const VideoPlayerModal: React.FC = () => {
               target="_blank"
               rel="noreferrer"
               className="px-2.5 py-1.5 rounded-xl bg-cyan-950/80 hover:bg-cyan-800/80 text-cyan-300 border border-cyan-500/40 text-xs font-bold flex items-center gap-1.5 transition-colors"
-              title={t.openNewTab || 'Abrir Vídeo em Nova Aba (Player Nativo)'}
+              title={t.openNewTab || "Open Video in New Tab (Native Player)"}
             >
               <ExternalLink size={14} />
-              <span className="hidden sm:inline">Nova Aba</span>
+              <span className="hidden sm:inline">{isEn ? "New Tab" : "Nova Aba"}</span>
             </a>
 
             {/* Favorite Button */}
@@ -578,7 +547,7 @@ export const VideoPlayerModal: React.FC = () => {
                   ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 shadow-glow-amber'
                   : 'bg-black/50 hover:bg-white/10 text-slate-300 border-white/10'
               }`}
-              title={activePlayingVideo.isFavorite ? (t.removeFavorite || 'Remover dos Favoritos') : (t.addFavorite || 'Favoritar Vídeo')}
+              title={activePlayingVideo.isFavorite ? (t.removeFavorite || "Remove from Favorites") : (t.addFavorite || "Favorite Video")}
             >
               <Star size={16} className={activePlayingVideo.isFavorite ? 'fill-amber-400' : ''} />
             </button>
@@ -588,7 +557,7 @@ export const VideoPlayerModal: React.FC = () => {
               href={effectiveDownloadUrl || activePlayingVideo.downloadUrl}
               download={activePlayingVideo.filename}
               className="p-2 rounded-xl bg-black/50 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition-colors"
-              title={t.download || 'Baixar Vídeo no Computador'}
+              title={t.download || "Download Video to Computer"}
             >
               <Download size={16} />
             </a>
@@ -597,7 +566,7 @@ export const VideoPlayerModal: React.FC = () => {
             <button
               onClick={() => setIsConfirmingDelete(true)}
               className="p-2 rounded-xl bg-black/50 hover:bg-rose-900/70 text-slate-300 hover:text-rose-300 border border-white/10 transition-colors"
-              title={t.delete || 'Excluir Vídeo do Disco'}
+              title={t.delete || "Delete Video from Disk"}
             >
               <Trash2 size={16} />
             </button>
@@ -606,7 +575,7 @@ export const VideoPlayerModal: React.FC = () => {
             <button
               onClick={() => setActivePlayingVideo(null)}
               className="p-2 rounded-xl bg-black/50 hover:bg-white/20 text-slate-300 hover:text-white border border-white/10 transition-colors"
-              title={t.close || 'Fechar (Esc)'}
+              title={t.close || "Close (Esc)"}
             >
               <X size={16} />
             </button>
@@ -652,20 +621,24 @@ export const VideoPlayerModal: React.FC = () => {
             onError={(e) => {
               console.error('Video player error event:', e);
               setIsLoading(false);
-              setVideoError("Não foi possível reproduzir este vídeo diretamente no reprodutor web.");
+              setVideoError(t.cannotPlayVideo || "Could not play this video directly in the web player.");
               setShowControls(true);
             }}
             onEnded={() => setIsPlaying(false)}
-            className="w-full h-full max-h-[80vh] object-contain cursor-pointer"
+            className={`w-full h-full border-0 shadow-none transition-all duration-300 ease-out ${
+              isFullscreen
+                ? (fitMode === 'cover' ? 'max-h-none object-cover rounded-none' : 'max-h-none object-contain rounded-none')
+                : 'max-h-[80vh] object-contain rounded-2xl'
+            } ${isFullscreen && !showControls ? 'cursor-none' : 'cursor-pointer'}`}
           >
-            Seu navegador não suporta reprodução deste vídeo.
+            {t.browserUnsupported || (isEn ? 'Your browser does not support playing this video.' : 'Seu navegador não suporta reprodução deste vídeo.')}
           </video>
 
           {/* Loading Spinner */}
           {isLoading && !videoError && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 pointer-events-none gap-2.5 z-10">
               <Loader2 size={36} className="text-brand-400 animate-spin" />
-              <span className="text-xs text-slate-300 font-medium">Carregando vídeo...</span>
+              <span className="text-xs text-slate-300 font-medium">{t.loadingVideo || "Loading video..."}</span>
             </div>
           )}
 
@@ -694,10 +667,10 @@ export const VideoPlayerModal: React.FC = () => {
                 <AlertTriangle size={36} />
               </div>
               <h4 className="text-base sm:text-lg font-bold text-white mb-1.5">
-                Não foi possível reproduzir este vídeo
+                {t.cannotPlayVideo || "Could not play this video"}
               </h4>
               <p className="text-xs sm:text-sm text-slate-400 max-w-md mb-6 leading-relaxed">
-                {videoError} O arquivo pode estar codificado em formato avançado ou aguardando sincronização de rede.
+                {videoError} {isEn ? 'The file may be encoded in an advanced format or awaiting network sync.' : 'O arquivo pode estar codificado em formato avançado ou aguardando sincronização de rede.'}
               </p>
               <div className="flex flex-wrap items-center justify-center gap-3">
                 <button
@@ -732,7 +705,7 @@ export const VideoPlayerModal: React.FC = () => {
                   className="px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 shadow-lg transition-all"
                 >
                   <ExternalLink size={16} />
-                  Abrir em Nova Aba
+                  {t.openInNewTab || "Open in New Tab"}
                 </a>
                 <a
                   href={effectiveDownloadUrl || activePlayingVideo.downloadUrl}
@@ -740,7 +713,7 @@ export const VideoPlayerModal: React.FC = () => {
                   className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs sm:text-sm flex items-center gap-2 border border-white/10 transition-all"
                 >
                   <Download size={16} />
-                  Baixar Arquivo
+                  {t.downloadVideo || "Download File"}
                 </a>
                 <button
                   type="button"
@@ -782,7 +755,7 @@ export const VideoPlayerModal: React.FC = () => {
               <button
                 onClick={handleTogglePlay}
                 className="p-1.5 sm:p-2 rounded-xl hover:bg-white/10 text-white transition-colors"
-                title={isPlaying ? (t.pause || 'Pausar (Espaço)') : (t.play || 'Reproduzir (Espaço)')}
+                title={isPlaying ? (t.pauseSpace || "Pause (Space)") : (t.playSpace || "Play (Space)")}
               >
                 {isPlaying ? <Pause size={18} /> : <Play size={18} />}
               </button>
@@ -800,7 +773,7 @@ export const VideoPlayerModal: React.FC = () => {
               <button
                 onClick={() => handleSeekRelative(5)}
                 className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
-                title={t.forward5s || 'Avançar 5s (Seta Direita)'}
+                title={t.forward5s || "Forward 5s (Right Arrow)"}
               >
                 <RotateCw size={15} />
               </button>
@@ -839,7 +812,7 @@ export const VideoPlayerModal: React.FC = () => {
                 <button
                   onClick={() => setShowSpeedMenu(!showSpeedMenu)}
                   className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[11px] font-mono font-bold text-slate-200 transition-colors"
-                  title={t.speed || 'Velocidade de Reprodução'}
+                  title={t.playbackSpeed || "Playback Speed"}
                 >
                   {playbackRate}x
                 </button>
@@ -869,11 +842,24 @@ export const VideoPlayerModal: React.FC = () => {
                 <PictureInPicture2 size={16} />
               </button>
 
+              {/* Fit / Fill Toggle */}
+              <button
+                onClick={() => setFitMode(m => m === 'contain' ? 'cover' : 'contain')}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  fitMode === 'cover'
+                    ? 'bg-brand-500/30 text-brand-300 ring-1 ring-brand-400/50'
+                    : 'hover:bg-white/10 text-slate-300 hover:text-white'
+                }`}
+                title={fitMode === 'cover' ? "Fit Video to Screen (P)" : "Fill Video on Screen (P)"}
+              >
+                {fitMode === 'cover' ? <Minimize size={16} /> : <Maximize size={16} />}
+              </button>
+
               {/* Fullscreen */}
               <button
                 onClick={handleToggleFullscreen}
-                className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
-                title={isFullscreen ? (t.exitFullscreen || 'Sair da Tela Cheia (F)') : (t.fullscreen || 'Tela Cheia (F)')}
+                className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                title={isFullscreen ? (t.exitFullscreen || "Exit Fullscreen (F)") : (t.fullscreen || "Fullscreen (F)")}
               >
                 {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
               </button>
@@ -890,9 +876,9 @@ export const VideoPlayerModal: React.FC = () => {
             <div className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up">
               <IconBadge variant="rose" size="lg" icon={<Trash2 size={24} />} className="mx-auto" />
               <div>
-                <h4 className="font-bold text-base text-white">{t.confirmDeleteTitle || 'Excluir Vídeo?'}</h4>
+                <h4 className="font-bold text-base text-white">{t.confirmDeleteTitle || "Delete Video?"}</h4>
                 <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                  {(t.confirmDeleteDesc || 'Deseja mover o vídeo "{title}" para a lixeira?').replace('{title}', activePlayingVideo.title || '')}
+                  {(t.confirmDeleteDesc || (isEn ? 'Do you want to move video "{title}" to trash?' : 'Deseja mover o vídeo "{title}" para a lixeira?')).replace('{title}', activePlayingVideo.title || '')}
                 </p>
               </div>
               <div className="flex items-center gap-2.5 pt-2">
@@ -910,7 +896,7 @@ export const VideoPlayerModal: React.FC = () => {
                   }}
                   className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
                 >
-                  {t.delete || 'Excluir Vídeo'}
+                  {t.delete || (isEn ? 'Delete Video' : 'Excluir Vídeo')}
                 </button>
               </div>
             </div>

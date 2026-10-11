@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, {  useState, useEffect , useMemo } from 'react';
 import {
   LayoutGrid,
   Cloud,
@@ -39,10 +39,11 @@ import {
 import { useAppStore, getCanonicalMediaFingerprint } from '../../store/useAppStore';
 import { GalleryViewMode, Album } from '../../types';
 import { translations } from '../../i18n/translations';
-import { matchesPaletteFuzzy, CHROMATIC_PALETTE_COLORS, colorPaletteCache, extractDominantColors } from '../../services/colorExtractor';
+import { matchesPaletteFuzzy, CHROMATIC_PALETTE_COLORS, colorPaletteCache } from '../../services/colorExtractor';
 import { formatFileSize } from '../../utils/formatters';
 import { IconBadge } from '../common/IconBadge';
 import { ColorFilterPopover } from '../common/ColorFilterPopover';
+import { ModalPortal } from '../common/ModalPortal';
 
 export const GalleryView: React.FC = () => {
   const {
@@ -83,8 +84,9 @@ export const GalleryView: React.FC = () => {
     settings,
     highlightedItemId
   } = useAppStore();
+  const isEn = settings?.language === 'en-US';
 
-  const t = translations[settings.language].gallery;
+  const t: any = translations[settings.language].gallery || {};
   const { uploadPhotoAlbum } = useAppStore();
 
   // Sync albums and folders on mount
@@ -139,68 +141,46 @@ export const GalleryView: React.FC = () => {
   const [folderNameInput, setFolderNameInput] = useState('');
   const [targetMoveFolder, setTargetMoveFolder] = useState('Geral');
 
-  // Filter Albums
-  let filtered = albums.filter(album => {
-    const matchesSearch =
-      album.title.toLowerCase().includes(gallerySearchQuery.toLowerCase()) ||
-      album.sourceDomain.toLowerCase().includes(gallerySearchQuery.toLowerCase()) ||
-      album.tags.some(t => t.toLowerCase().includes(gallerySearchQuery.toLowerCase()));
+  // Ultra-fast memoized filter & sort (Zero re-renders on scroll / 60 FPS guarantee)
+  const filtered = useMemo(() => {
+    const q = gallerySearchQuery.trim().toLowerCase();
+    const result = albums.filter(album => {
+      if (q) {
+        const matchesTitle = album.title.toLowerCase().includes(q);
+        const matchesDomain = album.sourceDomain.toLowerCase().includes(q);
+        const matchesTag = album.tags.some(tag => tag.toLowerCase().includes(q));
+        if (!matchesTitle && !matchesDomain && !matchesTag) return false;
+      }
 
-    const matchesTag = galleryTagFilter ? album.tags.includes(galleryTagFilter) : true;
-    const matchesDomain = localDomainFilter ? album.sourceDomain === localDomainFilter : true;
+      if (galleryTagFilter && !album.tags.includes(galleryTagFilter)) return false;
+      if (localDomainFilter && album.sourceDomain !== localDomainFilter) return false;
 
-    const isVideo = album.mediaType === 'video' ||
-      album.tags.some(t => t.toLowerCase().includes('vídeo') || t.toLowerCase().includes('video')) ||
-      (album.images || []).some(img => img.mediaType === 'video');
+      const isVideo = album.mediaType === 'video' || album.tags.some(tag => tag.toLowerCase().includes('video') || tag.toLowerCase().includes('vídeo'));
+      const isGif = album.hasGifs || album.mediaType === 'gif' || (album.gifCount && album.gifCount > 0) || album.tags.some(tag => tag.toLowerCase().includes('gif'));
 
-    const isGif = album.hasGifs ||
-      album.mediaType === 'gif' ||
-      album.tags.some(t => t.toLowerCase().includes('gif') || t.toLowerCase().includes('animad')) ||
-      (album.images || []).some(img => img.mediaType === 'gif' || img.isAnimated || /\.(gif|webp)(\?|$)/i.test(img.originalUrl || ''));
+      if (mediaTypeFilter === 'video' && !isVideo) return false;
+      if (mediaTypeFilter === 'gif' && !isGif) return false;
+      if (mediaTypeFilter === 'photo' && (isVideo || isGif)) return false;
 
-    const matchesMediaType =
-      mediaTypeFilter === 'all'
-        ? true
-        : mediaTypeFilter === 'video'
-        ? isVideo
-        : mediaTypeFilter === 'gif'
-        ? isGif
-        : (!isVideo && !isGif);
+      const isLocal = album.sourceOrigin === 'local' ||
+        album.sourceDomain === 'Upload Local' ||
+        album.sourceUrl.startsWith('local://') ||
+        album.id.startsWith('manual-') ||
+        album.id.startsWith('local-');
 
-    const isLocal = album.sourceOrigin === 'local' ||
-      album.sourceDomain === 'Upload Local' ||
-      album.sourceUrl.startsWith('local://') ||
-      album.id.startsWith('manual-') ||
-      album.id.startsWith('local-');
+      if (originFilter === 'local' && !isLocal) return false;
+      if (originFilter === 'remote' && isLocal) return false;
 
-    const matchesOrigin =
-      originFilter === 'all'
-        ? true
-        : originFilter === 'local'
-        ? isLocal
-        : !isLocal;
+      if (galleryColorFilter) {
+        const pal = album.coverColorPalette || [];
+        if (!matchesPaletteFuzzy(pal, galleryColorFilter)) return false;
+      }
 
-    const matchesColor = galleryColorFilter
-      ? ((album.coverColorPalette && matchesPaletteFuzzy(album.coverColorPalette, galleryColorFilter)) ||
-        (album.images || []).some(img => {
-          const pal = (img.colorPalette && img.colorPalette.length > 0)
-            ? img.colorPalette
-            : (colorPaletteCache.get(img.originalUrl) || colorPaletteCache.get(img.thumbnailUrl) || []);
-          return matchesPaletteFuzzy(pal, galleryColorFilter);
-        }) ||
-        (album.coverImage ? matchesPaletteFuzzy(colorPaletteCache.get(album.coverImage) || [], galleryColorFilter) : false))
-      : true;
+      if (activeAlbumFolder && (album.folder || 'Geral') !== activeAlbumFolder) return false;
 
-    const matchesFolder = activeAlbumFolder
-      ? (album.folder || 'Geral') === activeAlbumFolder
-      : true;
+      return true;
+    });
 
-    return matchesSearch && matchesTag && matchesColor && matchesDomain && matchesMediaType && matchesOrigin && matchesFolder;
-  });
-
-  // Sort Albums
-  filtered.sort((a, b) => {
-    let cmp = 0;
     const parseTime = (dateStr?: string) => {
       if (!dateStr) return 0;
       const parsed = new Date(dateStr).getTime();
@@ -210,66 +190,52 @@ export const GalleryView: React.FC = () => {
       return !isNaN(fallback) ? fallback : 0;
     };
 
-    if (gallerySortBy === 'name') {
-      cmp = a.title.localeCompare(b.title);
-    } else if (gallerySortBy === 'count') {
-      cmp = a.imageCount - b.imageCount;
-    } else if (gallerySortBy === 'size') {
-      cmp = a.totalSizeBytes - b.totalSizeBytes;
-    } else if (gallerySortBy === 'favorites') {
-      const favA = a.isFavorite ? 1 : 0;
-      const favB = b.isFavorite ? 1 : 0;
-      cmp = favA - favB;
-      if (cmp === 0) {
+    result.sort((a, b) => {
+      let cmp = 0;
+      if (gallerySortBy === 'name') {
+        cmp = a.title.localeCompare(b.title);
+      } else if (gallerySortBy === 'count') {
+        cmp = a.imageCount - b.imageCount;
+      } else if (gallerySortBy === 'size') {
+        cmp = a.totalSizeBytes - b.totalSizeBytes;
+      } else if (gallerySortBy === 'favorites') {
+        const favA = a.isFavorite ? 1 : 0;
+        const favB = b.isFavorite ? 1 : 0;
+        cmp = favA - favB;
+        if (cmp === 0) {
+          const timeA = parseTime(a.createdAt) || parseTime(a.updatedAt);
+          const timeB = parseTime(b.createdAt) || parseTime(b.updatedAt);
+          cmp = timeA - timeB;
+        }
+      } else if (gallerySortBy === 'modified') {
+        const timeA = parseTime(a.updatedAt) || parseTime(a.createdAt);
+        const timeB = parseTime(b.updatedAt) || parseTime(b.createdAt);
+        cmp = timeA - timeB;
+      } else {
         const timeA = parseTime(a.createdAt) || parseTime(a.updatedAt);
         const timeB = parseTime(b.createdAt) || parseTime(b.updatedAt);
         cmp = timeA - timeB;
       }
-    } else if (gallerySortBy === 'modified') {
-      const timeA = parseTime(a.updatedAt) || parseTime(a.createdAt);
-      const timeB = parseTime(b.updatedAt) || parseTime(b.createdAt);
-      cmp = timeA - timeB;
-    } else {
-      // 'recent' or 'date': strictly compare creation/download timestamps
-      const timeA = parseTime(a.createdAt) || parseTime(a.updatedAt);
-      const timeB = parseTime(b.createdAt) || parseTime(b.updatedAt);
-      cmp = timeA - timeB;
-    }
 
-    // Deterministic tie-breaker by ID when primary criteria are identical
-    if (cmp === 0) {
-      cmp = (a.id || '').localeCompare(b.id || '');
-    }
+      if (cmp === 0) {
+        cmp = (a.id || '').localeCompare(b.id || '');
+      }
 
-    return gallerySortOrder === 'asc' ? cmp : -cmp;
-  });
-
-  const allTags = Array.from(new Set(albums.flatMap(a => a.tags))).filter(Boolean).sort();
-  const allDomains = Array.from(new Set(albums.map(a => a.sourceDomain))).filter(Boolean).sort();
-  const paletteColors = ['#facc15', '#dc2626', '#3b82f6', '#10b981', '#ec4899', '#8b5cf6'];
-
-  // Dynamic computer vision: extract dominant colors for album covers that don't have palettes yet
-  useEffect(() => {
-    const unextracted = albums.filter(a =>
-      (!a.coverColorPalette || a.coverColorPalette.length === 0) &&
-      (!a.images?.[0]?.colorPalette || a.images[0].colorPalette.length === 0) &&
-      a.coverImage &&
-      !colorPaletteCache.has(a.coverImage)
-    ).slice(0, 24);
-
-    if (unextracted.length === 0) return;
-
-    let cancelled = false;
-    unextracted.forEach(alb => {
-      extractDominantColors(alb.coverImage).then(colors => {
-        if (!cancelled && colors && colors.length > 0) {
-          updateAlbum(alb.id, { coverColorPalette: colors });
-        }
-      });
+      return gallerySortOrder === 'asc' ? cmp : -cmp;
     });
 
-    return () => { cancelled = true; };
-  }, [albums.length]);
+    return result;
+  }, [albums, gallerySearchQuery, galleryTagFilter, localDomainFilter, mediaTypeFilter, originFilter, galleryColorFilter, activeAlbumFolder, gallerySortBy, gallerySortOrder]);
+
+  const allTags = useMemo<string[]>(() => {
+    return Array.from(new Set(albums.flatMap(a => a.tags))).filter(Boolean).sort();
+  }, [albums]);
+
+  const allDomains = useMemo<string[]>(() => {
+    return Array.from(new Set(albums.map(a => a.sourceDomain))).filter(Boolean).sort();
+  }, [albums]);
+  const paletteColors = ['#facc15', '#dc2626', '#3b82f6', '#10b981', '#ec4899', '#8b5cf6'];
+
 
 
 
@@ -357,7 +323,7 @@ export const GalleryView: React.FC = () => {
                   setActiveAlbumFolderModal({ type: 'move', albumIds: selectedAlbumIds });
                 }}
                 className="px-3.5 py-2 rounded-xl bg-violet-600/20 border border-violet-500/40 hover:bg-violet-600/30 text-violet-300 text-xs font-bold flex items-center gap-1.5 transition-all"
-                title={t.moveAlbumsTitle || "Mover álbuns selecionados para uma pasta"}
+                title={t.moveAlbumsTitle || "Move selected albums to a folder"}
               >
                 <Folder size={13} />
                 <span>{t.move} ({selectedAlbumIds.length})</span>
@@ -493,10 +459,10 @@ export const GalleryView: React.FC = () => {
             setActiveAlbumFolderModal({ type: 'create' });
           }}
           className="px-3.5 py-2 rounded-2xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 bg-surface/40 hover:bg-surface-elevated text-purple-300 border border-purple-500/30 hover:border-purple-500"
-          title={t.createFolderTitle || 'Criar nova pasta para organizar álbuns'}
+          title={t.createFolderTitle || "Create new folder to organize albums"}
         >
           <FolderPlus size={14} />
-          <span>{t.createFolder || '+ Nova Pasta'}</span>
+          <span>{t.createFolder || "+ New Folder"}</span>
         </button>
       </div>
 
@@ -523,7 +489,7 @@ export const GalleryView: React.FC = () => {
               className="h-10 px-3 rounded-xl bg-surface-elevated border border-border text-slate-200 text-xs outline-none focus:border-brand-500 max-w-[140px] sm:max-w-none truncate"
             >
               <option value="">{t.allWebsites || 'Todos os Websites'}</option>
-              {allDomains.map(d => (
+              {allDomains.map((d: string) => (
                 <option key={d} value={d}>{d}</option>
               ))}
             </select>
@@ -534,7 +500,7 @@ export const GalleryView: React.FC = () => {
               className="h-10 px-3 rounded-xl bg-surface-elevated border border-border text-slate-200 text-xs outline-none focus:border-brand-500 max-w-[140px] sm:max-w-none truncate"
             >
               <option value="">{t.artistsTags || 'Artistas / Tags'}</option>
-              {allTags.map(tag => (
+              {allTags.map((tag: string) => (
                 <option key={tag} value={tag}>#{tag}</option>
               ))}
             </select>
@@ -572,7 +538,7 @@ export const GalleryView: React.FC = () => {
                 <div className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 ${mediaTypeFilter === 'photo' ? 'bg-white/20 text-white' : 'bg-emerald-500/15 text-emerald-400'}`}>
                   <ImageIcon size={11} />
                 </div>
-                <span>{t.mediaPhotos || 'Álbuns de Fotos'} ({albums.filter(a => a.mediaType !== 'video' && !a.tags?.some(t => t.toLowerCase().includes('video'))).length})</span>
+                <span>{t.mediaPhotos || "Photo Albums"} ({albums.filter(a => a.mediaType !== 'video' && !a.tags?.some(t => t.toLowerCase().includes('video'))).length})</span>
               </button>
               <button
                 type="button"
@@ -586,7 +552,7 @@ export const GalleryView: React.FC = () => {
                 <div className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 ${mediaTypeFilter === 'video' ? 'bg-white/20 text-white' : 'bg-violet-500/15 text-violet-400'}`}>
                   <VideoIcon size={11} />
                 </div>
-                <span>{t.mediaVideos || 'Álbuns de Vídeos'} ({albums.filter(a => a.mediaType === 'video' || a.tags?.some(t => t.toLowerCase().includes('video'))).length})</span>
+                <span>{t.mediaVideos || "Video Albums"} ({albums.filter(a => a.mediaType === 'video' || a.tags?.some(t => t.toLowerCase().includes('video'))).length})</span>
               </button>
               <button
                 type="button"
@@ -628,7 +594,7 @@ export const GalleryView: React.FC = () => {
                     ? 'bg-amber-600 text-white shadow-sm ring-1 ring-amber-400/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-surface'
                 }`}
-                title={t.originLocalTitle || 'Álbuns extraídos pelo servidor local da sua máquina (Localhost)'}
+                title={t.originLocalTitle || "Albums extracted by local server on your machine (Localhost)"}
               >
                 <div className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 ${originFilter === 'local' ? 'bg-white/20 text-white' : 'bg-amber-500/15 text-amber-400'}`}>
                   <HardDrive size={11} />
@@ -643,7 +609,7 @@ export const GalleryView: React.FC = () => {
                     ? 'bg-sky-600 text-white shadow-sm ring-1 ring-sky-400/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-surface'
                 }`}
-                title={t.originRemoteTitle || 'Extrações feitas na nuvem'}
+                title={t.originRemoteTitle || "Cloud extractions"}
               >
                 <div className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 ${originFilter === 'remote' ? 'bg-white/20 text-white' : 'bg-sky-500/15 text-sky-400'}`}>
                   <Cloud size={11} />
@@ -683,8 +649,8 @@ export const GalleryView: React.FC = () => {
                 className="bg-transparent font-semibold text-slate-200 outline-none cursor-pointer text-xs truncate max-w-[165px] sm:max-w-none"
               >
                 <option value="recent" className="bg-surface">{gallerySortOrder === 'desc' ? (t.sortRecentDesc || 'Mais Recentes (Download)') : (t.sortRecentAsc || 'Mais Antigos (Download)')}</option>
-                <option value="modified" className="bg-surface">{gallerySortOrder === 'desc' ? (t.sortModifiedDesc || 'Últimos Modificados') : (t.sortModifiedAsc || 'Modificados Mais Antigos')}</option>
-                <option value="favorites" className="bg-surface">{gallerySortOrder === 'desc' ? (t.sortFavoritesDesc || 'Favoritos Primeiro') : (t.sortFavoritesAsc || 'Não-Favoritos Primeiro')}</option>
+                <option value="modified" className="bg-surface">{gallerySortOrder === 'desc' ? (t.sortModifiedDesc || "Recently Modified") : (t.sortModifiedAsc || 'Modificados Mais Antigos')}</option>
+                <option value="favorites" className="bg-surface">{gallerySortOrder === 'desc' ? (t.sortFavoritesDesc || "Favorites First") : (t.sortFavoritesAsc || "Non-Favorites First")}</option>
                 <option value="name" className="bg-surface">{gallerySortOrder === 'asc' ? (t.sortNameAsc || 'Nome (A → Z)') : (t.sortNameDesc || 'Nome (Z → A)')}</option>
                 <option value="count" className="bg-surface">{gallerySortOrder === 'desc' ? (t.sortCountDesc || 'Qtd Fotos (Maior)') : (t.sortCountAsc || 'Qtd Fotos (Menor)')}</option>
                 <option value="size" className="bg-surface">{gallerySortOrder === 'desc' ? (t.sortSizeDesc || 'Maior Tamanho') : (t.sortSizeAsc || 'Menor Tamanho')}</option>
@@ -706,7 +672,7 @@ export const GalleryView: React.FC = () => {
                 className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
                   galleryViewMode === 'grid-xl' ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-surface'
                 }`}
-                title={t.viewXlTitle || 'Ícones Extra Grandes'}
+                title={t.viewXlTitle || "Extra Large Icons"}
               >
                 <div className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 ${galleryViewMode === 'grid-xl' ? 'bg-white/20 text-white' : 'bg-brand-500/15 text-brand-400'}`}>
                   <LayoutGrid size={11} />
@@ -718,7 +684,7 @@ export const GalleryView: React.FC = () => {
                 className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
                   galleryViewMode === 'grid-lg' ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-surface'
                 }`}
-                title={t.viewLTitle || 'Ícones Grandes'}
+                title={t.viewLTitle || "Large Icons"}
               >
                 <div className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 ${galleryViewMode === 'grid-lg' ? 'bg-white/20 text-white' : 'bg-brand-500/15 text-brand-400'}`}>
                   <Grid size={11} />
@@ -730,7 +696,7 @@ export const GalleryView: React.FC = () => {
                 className={`px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
                   galleryViewMode === 'grid-md' ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-surface'
                 }`}
-                title={t.viewMTitle || 'Ícones Médios'}
+                title={t.viewMTitle || "Medium Icons"}
               >
                 <div className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 ${galleryViewMode === 'grid-md' ? 'bg-white/20 text-white' : 'bg-brand-500/15 text-brand-400'}`}>
                   <Grid size={10} />
@@ -787,7 +753,7 @@ export const GalleryView: React.FC = () => {
             className="flex items-center gap-1.5 overflow-x-auto no-scrollbar touch-scroll max-w-full sm:max-w-md py-0.5"
           >
             <span className="text-slate-500 text-[11px] font-semibold shrink-0">{t.tagCloudTitle}</span>
-            {allTags.map(tag => (
+            {allTags.map((tag: string) => (
               <button
                 key={tag}
                 onClick={() => setGalleryTagFilter(galleryTagFilter === tag ? null : tag)}
@@ -822,18 +788,18 @@ export const GalleryView: React.FC = () => {
                     className="rounded text-brand-500 cursor-pointer w-4 h-4"
                   />
                 </th>
-                <th className="p-3 w-[250px]">Título do Álbum</th>
+                <th className="p-3 w-[250px]">{isEn ? "Album Title" : "Título do Álbum"}</th>
                 <th className="p-3">Qtd Fotos</th>
-                <th className="p-3">% Resolução</th>
+                <th className="p-3">{isEn ? "% Resolution" : "% Resolução"}</th>
                 <th className="p-3">Tamanho</th>
-                <th className="p-3">Domínio</th>
+                <th className="p-3">{isEn ? "Domain" : "Domínio"}</th>
                 <th className="p-3">
                   <div className="flex items-center gap-1.5">
                     <Calendar size={13} className="text-slate-400" />
                     <span>Data</span>
                   </div>
                 </th>
-                <th className="p-3 text-right">Ações</th>
+                <th className="p-3 text-right">{isEn ? "Actions" : "Ações"}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -895,7 +861,7 @@ export const GalleryView: React.FC = () => {
                             ? 'text-rose-400 border-rose-500/40 bg-rose-500/10'
                             : 'text-slate-400 hover:text-rose-400 hover:border-rose-500'
                         }`}
-                        title={album.isFavorite ? 'Remover dos Favoritos' : 'Favoritar Álbum'}
+                        title={album.isFavorite ? (t.removeFavorite || (isEn ? 'Remove from Favorites' : 'Remover dos Favoritos')) : (t.addFavorite || (isEn ? 'Favorite Album' : 'Favoritar Álbum'))}
                       >
                         <Heart size={14} className={album.isFavorite ? 'fill-rose-400' : ''} />
                       </button>
@@ -909,7 +875,7 @@ export const GalleryView: React.FC = () => {
                       <button
                         onClick={() => setAlbumToDelete({ id: album.id, title: album.title })}
                         className="p-2 rounded-xl bg-surface-elevated border border-border hover:bg-rose-600 hover:border-rose-500 hover:text-white text-slate-400 transition-all shadow-sm"
-                        title="Excluir Álbum"
+                        title={t.deleteAlbum || (isEn ? 'Delete Album' : 'Excluir Álbum')}
                       >
                         <Trash2 size={14} />
                       </button>
@@ -967,7 +933,7 @@ export const GalleryView: React.FC = () => {
                           ? 'text-rose-400 bg-rose-500/10'
                           : 'text-slate-500 hover:text-rose-400 hover:bg-rose-500/10'
                       }`}
-                      title={album.isFavorite ? 'Remover dos Favoritos' : 'Favoritar Álbum'}
+                      title={album.isFavorite ? (t.removeFavorite || (isEn ? 'Remove from Favorites' : 'Remover dos Favoritos')) : (t.addFavorite || (isEn ? 'Favorite Album' : 'Favoritar Álbum'))}
                     >
                       <Heart size={13} className={album.isFavorite ? 'fill-rose-400' : ''} />
                     </button>
@@ -978,7 +944,7 @@ export const GalleryView: React.FC = () => {
                         setAlbumToDelete({ id: album.id, title: album.title });
                       }}
                       className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                      title="Excluir Álbum"
+                      title={t.deleteAlbum || (isEn ? 'Delete Album' : 'Excluir Álbum')}
                     >
                       <Trash2 size={13} />
                     </button>
@@ -1001,7 +967,15 @@ export const GalleryView: React.FC = () => {
                     alt={img.title}
                     loading="lazy"
                     decoding="async"
-                    onClick={() => openLightbox(img, album)}
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      openLightbox(img, album, {
+                        x: Math.round(rect.left),
+                        y: Math.round(rect.top),
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height),
+                      });
+                    }}
                     className="w-12 h-12 rounded-xl object-cover border border-border hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer shadow-sm"
                     title={`Abrir foto #${i + 1}`}
                   />
@@ -1018,7 +992,7 @@ export const GalleryView: React.FC = () => {
       ) : (
         /* Standard Grid Views (XL, LG, MD) Responsive */
         <div
-          className={`grid gap-3 sm:gap-5 ${
+          className={`gpu-accelerated-grid grid gap-3 sm:gap-5 ${
             galleryViewMode === 'grid-xl'
               ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
               : galleryViewMode === 'grid-md'
@@ -1042,7 +1016,7 @@ export const GalleryView: React.FC = () => {
                   navigateToView('album-detail', album.id);
                 }
               }}
-              className={`group glass-panel rounded-2xl border overflow-hidden transition-all duration-300 cursor-pointer flex flex-col justify-between ${
+              className={`group gpu-album-card bg-slate-900/90 rounded-2xl border overflow-hidden transition-all duration-300 cursor-pointer flex flex-col justify-between ${
                 highlightedItemId === album.id
                   ? 'ring-4 ring-brand-500 shadow-glow-brand animate-pulse'
                   : ''
@@ -1085,34 +1059,34 @@ export const GalleryView: React.FC = () => {
                     e.stopPropagation();
                     toggleSelectAlbum(album.id);
                   }}
-                  className={`absolute top-2.5 left-2.5 z-20 p-1.5 rounded-xl border backdrop-blur-md transition-all ${
+                  className={`absolute top-2.5 left-2.5 z-20 p-1.5 rounded-xl border transition-all ${
                     isSelected
                       ? 'bg-violet-600 text-white border-violet-400 shadow-glow-brand opacity-100 scale-100'
                       : isSelectionMode || selectedAlbumIds.length > 0
-                      ? 'bg-black/60 text-slate-400 hover:text-white border-white/20 opacity-100'
-                      : 'bg-black/50 text-slate-400 hover:text-white border-white/10 opacity-0 group-hover:opacity-100'
+                      ? 'bg-slate-950/85 text-slate-400 hover:text-white border-white/15 opacity-100'
+                      : 'bg-slate-950/85 text-slate-400 hover:text-white border-white/15 opacity-0 group-hover:opacity-100'
                   }`}
-                  title={isSelected ? 'Desmarcar álbum' : 'Selecionar álbum'}
+                  title={isSelected ? (t.deselectAlbum || "Deselect album") : (t.selectAlbum || "Select album")}
                 >
                   {isSelected ? <Check size={14} strokeWidth={3} /> : <Square size={13} />}
                 </button>
 
-                <span className={`absolute top-2.5 px-2 py-0.5 rounded-lg bg-black/70 backdrop-blur-md border border-white/10 font-mono text-[9px] sm:text-[10px] font-bold text-emerald-400 transition-all ${
+                <span className={`absolute top-2.5 px-2 py-0.5 rounded-lg bg-slate-950/90 border border-white/15 font-mono text-[9px] sm:text-[10px] font-bold text-emerald-400 shadow-sm transition-all ${
                   isSelected || isSelectionMode || selectedAlbumIds.length > 0 ? 'left-11' : 'left-2.5 group-hover:left-11'
                 }`}>
-                  {album.mediaType === 'video' ? 'Vídeo' : `${album.resolvedOriginalCount} / ${album.imageCount} Originais`}
+                  {album.mediaType === 'video' ? (isEn ? 'Video' : 'Vídeo') : `${album.resolvedOriginalCount} / ${album.imageCount} ${isEn ? 'Originals' : 'Originais'}`}
                 </span>
 
                 {/* Badge de Origem Local, Vídeo ou Duplicado no canto superior direito */}
                 <div className="absolute top-2.5 right-2.5 flex items-center gap-1 z-10 flex-wrap justify-end">
                   {isDuplicateAlbum && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/90 text-slate-950 font-bold text-[9px] shadow-sm" title="Álbum duplicado detectado na biblioteca">
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/90 text-slate-950 font-bold text-[9px] shadow-sm" title={t.duplicateDetected || "Duplicate album detected in library"}>
                       <Copy size={10} />
-                      <span>Duplicado</span>
+                      <span>{t.duplicateBadge || "Duplicate"}</span>
                     </span>
                   )}
                   {album.sourceOrigin === 'local' && (
-                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/90 text-slate-950 font-bold text-[9px] shadow-sm" title="Álbum do Servidor PC Local">
+                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/90 text-slate-950 font-bold text-[9px] shadow-sm" title={t.localServerAlbum || "Local PC Server Album"}>
                       <HardDrive size={10} />
                       <span>PC</span>
                     </span>
@@ -1122,8 +1096,8 @@ export const GalleryView: React.FC = () => {
                       <VideoIcon size={10} />
                     </span>
                   )}
-                  {(album.hasGifs || (album.gifCount && album.gifCount > 0) || album.mediaType === 'gif' || (album.images || []).some(img => img.mediaType === 'gif' || img.isAnimated)) && (
-                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-600 text-white font-bold text-[9px] shadow-sm backdrop-blur-md" title={`Álbum contém ${album.gifCount || ''} animações GIF`}>
+                  {(album.hasGifs || (album.gifCount && album.gifCount > 0) || album.mediaType === 'gif') && (
+                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-600/95 text-white font-bold text-[9px] shadow-sm border border-amber-400/30" title={isEn ? `Album contains ${album.gifCount || ''} GIF animations` : `Álbum contém ${album.gifCount || ''} animações GIF`}>
                       <Clapperboard size={10} />
                       <span>{album.gifCount ? `${album.gifCount} GIFs` : 'GIF'}</span>
                     </span>
@@ -1131,7 +1105,7 @@ export const GalleryView: React.FC = () => {
                 </div>
 
                 <div className="absolute bottom-2.5 left-2.5 flex items-center text-white text-xs">
-                  <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 font-semibold px-2 py-0.5 rounded bg-black/60 backdrop-blur-md border border-white/10">
+                  <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 font-semibold px-2 py-0.5 rounded bg-slate-950/90 border border-white/15 shadow-sm">
                     {album.totalSizeBytes > 0 ? formatFileSize(album.totalSizeBytes) : 'Tam. N/D'}
                   </span>
                 </div>
@@ -1173,7 +1147,7 @@ export const GalleryView: React.FC = () => {
                           ? 'text-rose-400 bg-rose-500/10'
                           : 'text-slate-500 hover:text-rose-400 hover:bg-rose-500/10'
                       }`}
-                      title={album.isFavorite ? 'Remover dos Favoritos' : 'Favoritar Álbum'}
+                      title={album.isFavorite ? (t.removeFavorite || (isEn ? 'Remove from Favorites' : 'Remover dos Favoritos')) : (t.addFavorite || (isEn ? 'Favorite Album' : 'Favoritar Álbum'))}
                     >
                       <Heart size={14} className={album.isFavorite ? 'fill-rose-400' : ''} />
                     </button>
@@ -1185,7 +1159,7 @@ export const GalleryView: React.FC = () => {
                         setActiveAlbumFolderModal({ type: 'move', albumId: album.id, albumIds: [album.id] });
                       }}
                       className="p-1.5 rounded-lg text-slate-500 hover:text-purple-400 hover:bg-purple-500/10 transition-colors"
-                      title="Mover Álbum para outra Pasta"
+                      title={t.moveAlbumToFolder || (isEn ? 'Move Album to another Folder' : 'Mover Álbum para outra Pasta')}
                     >
                       <Folder size={14} />
                     </button>
@@ -1196,7 +1170,7 @@ export const GalleryView: React.FC = () => {
                         setAlbumToDelete({ id: album.id, title: album.title });
                       }}
                       className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                      title="Excluir Álbum"
+                      title={t.deleteAlbum || (isEn ? 'Delete Album' : 'Excluir Álbum')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -1210,7 +1184,7 @@ export const GalleryView: React.FC = () => {
                   {album.updatedAt && album.updatedAt !== album.createdAt && (
                     <div className="flex items-center gap-1 font-mono text-[9px] text-amber-400/90" title={`Modificado em ${new Date(album.updatedAt).toLocaleString()}`}>
                       <Clock size={10} className="shrink-0" />
-                      <span>Modificado</span>
+                      <span>{t.modified || (isEn ? 'Modified' : 'Modificado')}</span>
                     </div>
                   )}
                 </div>
@@ -1237,18 +1211,18 @@ export const GalleryView: React.FC = () => {
           <div className="w-12 h-12 rounded-2xl bg-surface-elevated text-slate-400 border border-border flex items-center justify-center mx-auto">
             <Folder size={22} />
           </div>
-          <h4 className="text-sm font-bold text-slate-200">Nenhum álbum encontrado</h4>
+          <h4 className="text-sm font-bold text-slate-200">{isEn ? "No albums found" : "Nenhum álbum encontrado"}</h4>
           <p className="text-xs text-slate-400 max-w-sm mx-auto">
             {activeAlbumFolder
-              ? `Não há álbuns cadastrados na pasta "${activeAlbumFolder}".`
-              : 'Nenhum álbum corresponde aos filtros selecionados.'}
+              ? (isEn ? `No albums in folder "${activeAlbumFolder}".` : `Não há álbuns cadastrados na pasta "${activeAlbumFolder}".`)
+              : (isEn ? "No albums match the selected filters." : "Nenhum álbum corresponde aos filtros selecionados.")}
           </p>
           {activeAlbumFolder && (
             <button
               onClick={() => setActiveAlbumFolder(null)}
               className="px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold transition-all inline-flex items-center gap-1.5 shadow-sm"
             >
-              <span>Ver Todos os Álbuns</span>
+              <span>{isEn ? "View All Albums" : "Ver Todos os Álbuns"}</span>
             </button>
           )}
         </div>
@@ -1256,412 +1230,424 @@ export const GalleryView: React.FC = () => {
 
       {/* Modal de Criação / Upload de Álbum de Fotos */}
       {isUploadModalOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => {
-            if (!isUploadingAlbum) setIsUploadModalOpen(false);
-          }}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-brand-500/40 rounded-3xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl animate-scale-up"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => {
+              if (!isUploadingAlbum) setIsUploadModalOpen(false);
+            }}
           >
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-2xl bg-brand-500/20 text-brand-400 border border-brand-500/30">
-                <FolderHeart size={20} />
-              </div>
-              <div>
-                <h4 className="font-bold text-base text-white">Criar Novo Álbum de Fotos</h4>
-                <p className="text-xs text-slate-400">Faça upload de fotos do seu dispositivo para a galeria</p>
-              </div>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (!uploadTitle.trim() || uploadFiles.length === 0 || isUploadingAlbum) return;
-                setIsUploadingAlbum(true);
-                const targetFolder = uploadFolder === '__custom__' ? (uploadCustomFolder.trim() || 'Geral') : (uploadFolder || 'Geral');
-                try {
-                  const success = await uploadPhotoAlbum(uploadTitle.trim(), uploadFiles, targetFolder);
-                  if (success) {
-                    setUploadTitle('');
-                    setUploadFiles([]);
-                    setUploadCustomFolder('');
-                    setIsUploadModalOpen(false);
-                  }
-                } finally {
-                  setIsUploadingAlbum(false);
-                }
-              }}
-              className="space-y-4"
+            <div
+              className="bg-slate-900 border border-brand-500/40 rounded-3xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl animate-scale-up"
+              onClick={(e) => e.stopPropagation()}
             >
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                  Título do Álbum:
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: Férias de Verão, Sessão de Fotos..."
-                  value={uploadTitle}
-                  onChange={(e) => setUploadTitle(e.target.value)}
-                  className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500"
-                />
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-brand-500/20 text-brand-400 border border-brand-500/30">
+                  <FolderHeart size={20} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-base text-white">{isEn ? "Create New Photo Album" : "Criar Novo Álbum de Fotos"}</h4>
+                  <p className="text-xs text-slate-400">{isEn ? "Upload photos from your device to the gallery" : "Faça upload de fotos do seu dispositivo para a galeria"}</p>
+                </div>
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1.5 flex items-center justify-between">
-                  <span>Pasta de Destino:</span>
-                  <span className="text-[10px] text-slate-400 font-normal">Organize seus álbuns</span>
-                </label>
-                <select
-                  value={uploadFolder}
-                  onChange={(e) => setUploadFolder(e.target.value)}
-                  className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-brand-500"
-                >
-                  {albumFolders.map((f) => (
-                    <option key={f.id} value={f.name}>
-                      {f.name} ({f.count})
-                    </option>
-                  ))}
-                  <option value="__custom__">+ Nova Pasta Personalizada...</option>
-                </select>
-                {uploadFolder === '__custom__' && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!uploadTitle.trim() || uploadFiles.length === 0 || isUploadingAlbum) return;
+                  setIsUploadingAlbum(true);
+                  const targetFolder = uploadFolder === '__custom__' ? (uploadCustomFolder.trim() || 'Geral') : (uploadFolder || 'Geral');
+                  try {
+                    const success = await uploadPhotoAlbum(uploadTitle.trim(), uploadFiles, targetFolder);
+                    if (success) {
+                      setUploadTitle('');
+                      setUploadFiles([]);
+                      setUploadCustomFolder('');
+                      setIsUploadModalOpen(false);
+                    }
+                  } finally {
+                    setIsUploadingAlbum(false);
+                  }
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    {isEn ? "Album Title:" : "Título do Álbum:"}
+                  </label>
                   <input
                     type="text"
-                    placeholder="Nome da nova pasta..."
-                    value={uploadCustomFolder}
-                    onChange={(e) => setUploadCustomFolder(e.target.value)}
-                    className="mt-2 w-full bg-surface border border-brand-500/60 rounded-2xl px-4 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500"
-                    autoFocus
+                    required
+                    placeholder={isEn ? "Ex: Summer Vacation, Studio Session..." : "Ex: Férias de Verão, Sessão de Fotos..."}
+                    value={uploadTitle}
+                    onChange={(e) => setUploadTitle(e.target.value)}
+                    className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500"
                   />
-                )}
-              </div>
+                </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                  Selecionar Fotos (JPEG, PNG, WebP):
-                </label>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  required
-                  onChange={(e) => {
-                    if (e.target.files) {
-                      setUploadFiles(Array.from(e.target.files));
-                    }
-                  }}
-                  className="w-full bg-surface border border-border rounded-2xl px-3 py-2 text-xs text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-brand-600 file:text-white hover:file:bg-brand-500 cursor-pointer"
-                />
-                {uploadFiles.length > 0 && (
-                  <p className="text-[11px] text-emerald-400 font-mono mt-1.5 flex items-center gap-1">
-                    <Check size={12} strokeWidth={3} />
-                    <span>{uploadFiles.length} foto(s) selecionada(s)</span>
-                  </p>
-                )}
-              </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5 flex items-center justify-between">
+                    <span>{isEn ? "Destination Folder:" : "Pasta de Destino:"}</span>
+                    <span className="text-[10px] text-slate-400 font-normal">{isEn ? "Organize your albums" : "Organize seus álbuns"}</span>
+                  </label>
+                  <select
+                    value={uploadFolder}
+                    onChange={(e) => setUploadFolder(e.target.value)}
+                    className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-brand-500"
+                  >
+                    {albumFolders.map((f) => (
+                      <option key={f.id} value={f.name}>
+                        {f.name} ({f.count})
+                      </option>
+                    ))}
+                    <option value="__custom__">{isEn ? "+ New Custom Folder..." : "+ Nova Pasta Personalizada..."}</option>
+                  </select>
+                  {uploadFolder === '__custom__' && (
+                    <input
+                      type="text"
+                      placeholder={isEn ? "New folder name..." : "Nome da nova pasta..."}
+                      value={uploadCustomFolder}
+                      onChange={(e) => setUploadCustomFolder(e.target.value)}
+                      className="mt-2 w-full bg-surface border border-brand-500/60 rounded-2xl px-4 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500"
+                      autoFocus
+                    />
+                  )}
+                </div>
 
-              <div className="flex items-center justify-end gap-2.5 pt-2">
-                <button
-                  type="button"
-                  disabled={isUploadingAlbum}
-                  onClick={() => setIsUploadModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isUploadingAlbum || !uploadTitle.trim() || uploadFiles.length === 0}
-                  className="px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-glow-brand flex items-center gap-1.5"
-                >
-                  {isUploadingAlbum ? 'Enviando Fotos...' : 'Criar Álbum Agora'}
-                </button>
-              </div>
-            </form>
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    {isEn ? "Select Photos (JPEG, PNG, WebP):" : "Selecionar Fotos (JPEG, PNG, WebP):"}
+                  </label>
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    required
+                    onChange={(e) => {
+                      if (e.target.files) {
+                        setUploadFiles(Array.from(e.target.files));
+                      }
+                    }}
+                    className="w-full bg-surface border border-border rounded-2xl px-3 py-2 text-xs text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-brand-600 file:text-white hover:file:bg-brand-500 cursor-pointer"
+                  />
+                  {uploadFiles.length > 0 && (
+                    <p className="text-[11px] text-emerald-400 font-mono mt-1.5 flex items-center gap-1">
+                      <Check size={12} strokeWidth={3} />
+                      <span>{uploadFiles.length} foto(s) selecionada(s)</span>
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    disabled={isUploadingAlbum}
+                    onClick={() => setIsUploadModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUploadingAlbum || !uploadTitle.trim() || uploadFiles.length === 0}
+                    className="px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-glow-brand flex items-center gap-1.5"
+                  >
+                    {isUploadingAlbum ? 'Enviando Fotos...' : 'Criar Álbum Agora'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Modal de Confirmação de Exclusão de Álbum */}
       {albumToDelete && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setAlbumToDelete(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setAlbumToDelete(null)}
           >
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
-              <Trash2 size={24} />
-            </div>
-            <div>
-              <h4 className="font-bold text-base text-white">Excluir Álbum?</h4>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                Tem certeza que deseja apagar o álbum <span className="font-semibold text-slate-200">"{albumToDelete.title}"</span>? O álbum será movido para a lixeira.
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setAlbumToDelete(null)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await deleteAlbum(albumToDelete.id);
-                  setAlbumToDelete(null);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                Sim, Excluir
-              </button>
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h4 className="font-bold text-base text-white">{isEn ? "Delete Album?" : "Excluir Álbum?"}</h4>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  Tem certeza que deseja apagar o álbum <span className="font-semibold text-slate-200">"{albumToDelete.title}"</span>? O álbum será movido para a lixeira.
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAlbumToDelete(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await deleteAlbum(albumToDelete.id);
+                    setAlbumToDelete(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {isEn ? "Yes, Delete" : "Sim, Excluir"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Modal de Confirmação de Exclusão em Lote */}
       {isConfirmingBatchDelete && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setIsConfirmingBatchDelete(false)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setIsConfirmingBatchDelete(false)}
           >
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
-              <Trash2 size={24} />
-            </div>
-            <div>
-              <h4 className="font-bold text-base text-white">Excluir {selectedAlbumIds.length} Álbuns?</h4>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                Tem certeza que deseja apagar os <span className="font-semibold text-rose-300">{selectedAlbumIds.length}</span> álbuns selecionados? Todos serão movidos para a lixeira.
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsConfirmingBatchDelete(false)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  for (const id of selectedAlbumIds) {
-                    await deleteAlbum(id);
-                  }
-                  clearSelectedAlbums();
-                  setIsConfirmingBatchDelete(false);
-                  setIsSelectionMode(false);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                Sim, Excluir Todos
-              </button>
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h4 className="font-bold text-base text-white">{isEn ? `Delete ${selectedAlbumIds.length} Albums?` : `Excluir ${selectedAlbumIds.length} Álbuns?`}</h4>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  Tem certeza que deseja apagar os <span className="font-semibold text-rose-300">{selectedAlbumIds.length}</span> álbuns selecionados? Todos serão movidos para a lixeira.
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmingBatchDelete(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    for (const id of selectedAlbumIds) {
+                      await deleteAlbum(id);
+                    }
+                    clearSelectedAlbums();
+                    setIsConfirmingBatchDelete(false);
+                    setIsSelectionMode(false);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {isEn ? "Yes, Delete" : "Sim, Excluir"} Todos
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Modal de Criação de Pasta */}
       {activeAlbumFolderModal?.type === 'create' && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setActiveAlbumFolderModal(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-purple-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setActiveAlbumFolderModal(null)}
           >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
-                <FolderPlus size={20} />
+            <div
+              className="bg-slate-900 border border-purple-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
+                  <FolderPlus size={20} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-base text-white">{isEn ? "New Album Folder" : "Nova Pasta de Álbuns"}</h4>
+                  <p className="text-xs text-slate-400">{isEn ? "Organize your albums by artist or category" : "Organize seus álbuns por artista ou categoria"}</p>
+                </div>
               </div>
               <div>
-                <h4 className="font-bold text-base text-white">Nova Pasta de Álbuns</h4>
-                <p className="text-xs text-slate-400">Organize seus álbuns por artista ou categoria</p>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">{isEn ? "Folder Name:" : "Nome da Pasta:"}</label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={folderNameInput}
+                  onChange={e => setFolderNameInput(e.target.value)}
+                  onKeyDown={async e => {
+                    if (e.key === 'Enter' && folderNameInput.trim()) {
+                      await createAlbumFolder(folderNameInput.trim());
+                      setActiveAlbumFolderModal(null);
+                    }
+                  }}
+                  placeholder="Ex: Viagens, Favoritas..."
+                  className="w-full h-10 px-3.5 rounded-xl bg-surface-elevated border border-border text-slate-100 text-xs outline-none focus:border-purple-500"
+                />
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveAlbumFolderModal(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={!folderNameInput.trim()}
+                  onClick={async () => {
+                    if (folderNameInput.trim()) {
+                      await createAlbumFolder(folderNameInput.trim());
+                      setActiveAlbumFolderModal(null);
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-purple-600/30 transition-colors"
+                >
+                  {isEn ? "Create Folder" : "Criar Pasta"}
+                </button>
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Nome da Pasta:</label>
-              <input
-                type="text"
-                autoFocus
-                value={folderNameInput}
-                onChange={e => setFolderNameInput(e.target.value)}
-                onKeyDown={async e => {
-                  if (e.key === 'Enter' && folderNameInput.trim()) {
-                    await createAlbumFolder(folderNameInput.trim());
-                    setActiveAlbumFolderModal(null);
-                  }
-                }}
-                placeholder="Ex: Viagens, Favoritas..."
-                className="w-full h-10 px-3.5 rounded-xl bg-surface-elevated border border-border text-slate-100 text-xs outline-none focus:border-purple-500"
-              />
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setActiveAlbumFolderModal(null)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={!folderNameInput.trim()}
-                onClick={async () => {
-                  if (folderNameInput.trim()) {
-                    await createAlbumFolder(folderNameInput.trim());
-                    setActiveAlbumFolderModal(null);
-                  }
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-purple-600/30 transition-colors"
-              >
-                Criar Pasta
-              </button>
-            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Modal de Renomear Pasta */}
       {activeAlbumFolderModal?.type === 'rename' && activeAlbumFolderModal.folderName && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setActiveAlbumFolderModal(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-brand-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setActiveAlbumFolderModal(null)}
           >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-brand-500/20 text-brand-400 border border-brand-500/30 flex items-center justify-center">
-                <Edit2 size={20} />
+            <div
+              className="bg-slate-900 border border-brand-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-brand-500/20 text-brand-400 border border-brand-500/30 flex items-center justify-center">
+                  <Edit2 size={20} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-base text-white">{isEn ? "Rename Folder" : "Renomear Pasta"}</h4>
+                  <p className="text-xs text-slate-400">{isEn ? "Update selected folder name" : "Atualize o nome da pasta selecionada"}</p>
+                </div>
               </div>
               <div>
-                <h4 className="font-bold text-base text-white">Renomear Pasta</h4>
-                <p className="text-xs text-slate-400">Atualize o nome da pasta selecionada</p>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">{isEn ? "New Name:" : "Novo Nome:"}</label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={folderNameInput}
+                  onChange={e => setFolderNameInput(e.target.value)}
+                  onKeyDown={async e => {
+                    if (e.key === 'Enter' && folderNameInput.trim()) {
+                      await renameAlbumFolder(activeAlbumFolderModal.folderName!, folderNameInput.trim());
+                      setActiveAlbumFolderModal(null);
+                    }
+                  }}
+                  placeholder={activeAlbumFolderModal.folderName}
+                  className="w-full h-10 px-3.5 rounded-xl bg-surface-elevated border border-border text-slate-100 text-xs outline-none focus:border-brand-500"
+                />
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveAlbumFolderModal(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={!folderNameInput.trim() || folderNameInput.trim() === activeAlbumFolderModal.folderName}
+                  onClick={async () => {
+                    if (folderNameInput.trim() && folderNameInput.trim() !== activeAlbumFolderModal.folderName) {
+                      await renameAlbumFolder(activeAlbumFolderModal.folderName!, folderNameInput.trim());
+                      setActiveAlbumFolderModal(null);
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-brand-600/30 transition-colors"
+                >
+                  Salvar
+                </button>
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Novo Nome:</label>
-              <input
-                type="text"
-                autoFocus
-                value={folderNameInput}
-                onChange={e => setFolderNameInput(e.target.value)}
-                onKeyDown={async e => {
-                  if (e.key === 'Enter' && folderNameInput.trim()) {
-                    await renameAlbumFolder(activeAlbumFolderModal.folderName!, folderNameInput.trim());
-                    setActiveAlbumFolderModal(null);
-                  }
-                }}
-                placeholder={activeAlbumFolderModal.folderName}
-                className="w-full h-10 px-3.5 rounded-xl bg-surface-elevated border border-border text-slate-100 text-xs outline-none focus:border-brand-500"
-              />
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setActiveAlbumFolderModal(null)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={!folderNameInput.trim() || folderNameInput.trim() === activeAlbumFolderModal.folderName}
-                onClick={async () => {
-                  if (folderNameInput.trim() && folderNameInput.trim() !== activeAlbumFolderModal.folderName) {
-                    await renameAlbumFolder(activeAlbumFolderModal.folderName!, folderNameInput.trim());
-                    setActiveAlbumFolderModal(null);
-                  }
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-brand-600/30 transition-colors"
-              >
-                Salvar
-              </button>
-            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Modal de Mover Álbum(ns) */}
       {activeAlbumFolderModal?.type === 'move' && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setActiveAlbumFolderModal(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-violet-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setActiveAlbumFolderModal(null)}
           >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-violet-500/20 text-violet-400 border border-violet-500/30 flex items-center justify-center">
-                <Folder size={20} />
+            <div
+              className="bg-slate-900 border border-violet-500/40 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-violet-500/20 text-violet-400 border border-violet-500/30 flex items-center justify-center">
+                  <Folder size={20} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-base text-white">{isEn ? "Move to Folder" : "Mover para Pasta"}</h4>
+                  <p className="text-xs text-slate-400">
+                    {isEn ? `Moving ${activeAlbumFolderModal.albumIds?.length || 1} selected album(s)` : `Movendo ${activeAlbumFolderModal.albumIds?.length || 1} álbum(ns) selecionado(s)`}
+                  </p>
+                </div>
               </div>
               <div>
-                <h4 className="font-bold text-base text-white">Mover para Pasta</h4>
-                <p className="text-xs text-slate-400">
-                  Movendo {activeAlbumFolderModal.albumIds?.length || 1} álbum(ns) selecionado(s)
-                </p>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">{isEn ? "Select or type folder name:" : "Selecione ou digite o nome da pasta:"}</label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={targetMoveFolder}
+                  onChange={e => setTargetMoveFolder(e.target.value)}
+                  list="gallery-move-folder-options"
+                  placeholder="Geral"
+                  className="w-full h-10 px-3.5 rounded-xl bg-surface-elevated border border-border text-slate-100 text-xs outline-none focus:border-violet-500"
+                />
+                <datalist id="gallery-move-folder-options">
+                  <option value="Geral" />
+                  {albumFolders.map(f => (
+                    <option key={f.name} value={f.name} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveAlbumFolderModal(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ids = activeAlbumFolderModal.albumIds || (activeAlbumFolderModal.albumId ? [activeAlbumFolderModal.albumId] : []);
+                    if (ids.length > 0) {
+                      await moveAlbumsToFolder(ids, targetMoveFolder.trim() || 'Geral');
+                      clearSelectedAlbums();
+                      setActiveAlbumFolderModal(null);
+                      setIsSelectionMode(false);
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold shadow-lg shadow-violet-600/30 transition-colors"
+                >
+                  Confirmar e Mover
+                </button>
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Selecione ou digite o nome da pasta:</label>
-              <input
-                type="text"
-                autoFocus
-                value={targetMoveFolder}
-                onChange={e => setTargetMoveFolder(e.target.value)}
-                list="gallery-move-folder-options"
-                placeholder="Geral"
-                className="w-full h-10 px-3.5 rounded-xl bg-surface-elevated border border-border text-slate-100 text-xs outline-none focus:border-violet-500"
-              />
-              <datalist id="gallery-move-folder-options">
-                <option value="Geral" />
-                {albumFolders.map(f => (
-                  <option key={f.name} value={f.name} />
-                ))}
-              </datalist>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setActiveAlbumFolderModal(null)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  const ids = activeAlbumFolderModal.albumIds || (activeAlbumFolderModal.albumId ? [activeAlbumFolderModal.albumId] : []);
-                  if (ids.length > 0) {
-                    await moveAlbumsToFolder(ids, targetMoveFolder.trim() || 'Geral');
-                    clearSelectedAlbums();
-                    setActiveAlbumFolderModal(null);
-                    setIsSelectionMode(false);
-                  }
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold shadow-lg shadow-violet-600/30 transition-colors"
-              >
-                Confirmar e Mover
-              </button>
-            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );

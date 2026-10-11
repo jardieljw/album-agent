@@ -57,11 +57,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen = false, onCloseM
       items: [
         { id: 'home' as ViewId, label: t.home || (settings.language === 'en-US' ? 'Home' : 'Início'), icon: Home, badge: null },
         { id: 'extractor' as ViewId, label: t.imageExtractor, icon: Zap, badge: null },
-        { id: 'multi-album' as ViewId, label: t.multiAlbum, icon: Compass, badge: t.badgeNew || 'NEW', badgeColor: 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' },
-        { id: 'web-video-scraper' as ViewId, label: t.webVideoScraper, icon: Film, badge: t.badgeNew || 'NEW', badgeColor: 'bg-violet-500/20 text-violet-300 border border-violet-500/30' },
+        { id: 'multi-album' as ViewId, label: t.multiAlbum, icon: Compass, badge: null },
+        { id: 'web-video-scraper' as ViewId, label: t.webVideoScraper, icon: Film, badge: null },
         { id: 'batch-queue' as ViewId, label: t.batchProcessor, icon: Layers, badge: null },
         { id: 'live-monitor' as ViewId, label: t.aiLiveMonitor, icon: Activity, badge: activeJobsCount > 0 ? `${activeJobsCount} ${t.badgeLive || 'LIVE'}` : null, badgeColor: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' },
-        { id: 'teaching' as ViewId, label: t.aiRefiner, icon: GraduationCap, badge: null },
       ]
     },
     {

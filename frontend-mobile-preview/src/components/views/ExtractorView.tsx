@@ -25,7 +25,6 @@ import { useAppStore } from '../../store/useAppStore';
 import { backendApi } from '../../services/realApi';
 import { soundEffects } from '../../services/soundEffects';
 import { ExtractionMode, ExtractionJob, MediaExtractFilter } from '../../types';
-import { TelemetryBar } from '../common/TelemetryBar';
 import { translations } from '../../i18n/translations';
 import { AiEngineSelector } from '../common/AiEngineSelector';
 import { FolderSelectModal } from '../common/FolderSelectModal';
@@ -51,7 +50,8 @@ export const ExtractorView: React.FC = () => {
     saveExtractedVideoToGallery,
     syncVideos
   } = useAppStore();
-  const t = translations[settings.language].extractor;
+  const isEn = settings?.language === 'en-US';
+  const t: any = translations[settings.language].extractor || {};
 
   const [inputTab, setInputTab] = useState<'single' | 'batch'>(() => {
     if (typeof window !== 'undefined') {
@@ -135,7 +135,7 @@ export const ExtractorView: React.FC = () => {
     
     const existing = albums.find(a => a.sourceUrl === targetUrl.trim());
     if (existing) {
-      if (!window.confirm(t.alreadyExtractedConfirm || "Este link já foi extraído e está na sua galeria. Deseja extrair novamente?")) {
+      if (!window.confirm(t.alreadyExtractedConfirm || "This link has already been extracted. Extract again?")) {
         return;
       }
     }
@@ -150,7 +150,7 @@ export const ExtractorView: React.FC = () => {
       addLog({
         level: 'info',
         category: (activeAiEngine || 'gemini_layout_explorer').toUpperCase(),
-        message: `Iniciando extração [${(activeAiEngine || 'gemini_layout_explorer').toUpperCase()}] com ${settings.aiModel} em ${targetUrl} (Pasta: ${folder})...`
+        message: isEn ? `Starting extraction [${(activeAiEngine || "gemini_layout_explorer").toUpperCase()}] with ${settings.aiModel} on ${targetUrl} (Folder: ${folder})...` : `Iniciando extração [${(activeAiEngine || "gemini_layout_explorer").toUpperCase()}] com ${settings.aiModel} em ${targetUrl} (Pasta: ${folder})...`
       });
 
       const isVid = mediaTypeFilter === 'videos' || isVideoKeyword(targetUrl);
@@ -221,7 +221,7 @@ export const ExtractorView: React.FC = () => {
                 : rawThumb;
               const isVideoItem = event.image?.media_type === 'video' || event.media_type === 'video';
               const isGifItem = event.image?.media_type === 'gif' || event.media_type === 'gif';
-              const mediaPrefix = isVideoItem ? 'Vídeo' : isGifItem ? 'GIF' : 'Foto';
+              const mediaPrefix = isVideoItem ? (isEn ? "Video" : "Vídeo") : isGifItem ? "GIF" : (isEn ? "Photo" : "Foto");
               const isPass = event.validation_status === 'PASS' || event.image?.validation_status === 'PASS';
               const isNoise = event.image?.classification === 'banner_noise' || event.validation_status === 'REJECTED';
               const dims = event.dimensions || (event.image?.width ? `${event.image.width}x${event.image.height}` : 'Original');
@@ -283,7 +283,7 @@ export const ExtractorView: React.FC = () => {
             updateJob(jobId, {
               status: 'completed',
               progressPercent: 100,
-              currentStage: isVideoMode ? (t.videosExtractedSuccess || 'Vídeos extraídos com sucesso!') : (t.albumExtractedSuccess || 'Álbum salvo com sucesso!'),
+              currentStage: isVideoMode ? (t.videosExtractedSuccess || "Videos extracted successfully!") : (t.albumExtractedSuccess || "Album saved successfully!"),
               resolvedOriginalCount: completedAlbum.images.length
             });
             addAlbum(completedAlbum);
@@ -292,14 +292,14 @@ export const ExtractorView: React.FC = () => {
             if (isVideoMode) {
               syncVideos();
               addNotification({
-                title: t.videoNotificationTitle || 'Vídeo(s) Extraído(s) com Sucesso!',
+                title: t.videoNotificationTitle || "Video(s) Extracted Successfully!",
                 message: `"${completedAlbum.title}" com ${videoCount > 0 ? videoCount : completedAlbum.images.length} stream(s) prontos na Galeria de Vídeos.`,
                 type: 'success',
                 linkViewId: 'videos'
               });
             } else {
               addNotification({
-                title: t.albumNotificationTitle || 'Álbum Extraído com Sucesso!',
+                title: t.albumNotificationTitle || "Album Extracted Successfully!",
                 message: `"${completedAlbum.title}" com ${completedAlbum.images.length} fotos salvas em disco.`,
                 type: 'success',
                 linkViewId: 'album-detail',
@@ -320,7 +320,7 @@ export const ExtractorView: React.FC = () => {
 
     setIsExtracting(false);
     addNotification({
-      title: t.failStartExtraction || 'Falha ao Iniciar Extração',
+      title: t.failStartExtraction || (isEn ? "Failed to Start Extraction" : "Falha ao Iniciar Extração"),
       message: backendOnline
         ? (t.failStartExtractionMsg || 'O servidor backend não conseguiu iniciar a tarefa para esta URL. Verifique a URL informada.')
         : (t.backendOfflineMsg || 'O backend Python está offline. Inicie o servidor via start_server.bat (porta 8000).'),
@@ -334,7 +334,7 @@ export const ExtractorView: React.FC = () => {
 
     const dupes = urls.filter(u => albums.some(a => a.sourceUrl === u));
     if (dupes.length > 0) {
-      const confirmMsg = (t.duplicateLinksConfirm || '{count} link(s) já existem na sua galeria. Deseja extraí-los novamente?').replace('{count}', String(dupes.length));
+      const confirmMsg = (t.duplicateLinksConfirm || '{count} link(s) already exist in your library. Extract them again?').replace('{count}', String(dupes.length));
       if (!window.confirm(confirmMsg)) {
         return;
       }
@@ -392,7 +392,7 @@ export const ExtractorView: React.FC = () => {
       });
       navigateToView('batch-queue');
     } else {
-      addNotification({ title: 'Erro', message: t.backendOfflineError || 'Backend offline. Não é possível extrair lote.', type: 'error' });
+      addNotification({ title: t.error || 'Error', message: t.backendOfflineError || 'Backend offline. Cannot extract batch.', type: 'error' });
     }
     setIsExtracting(false);
   };
@@ -407,7 +407,7 @@ export const ExtractorView: React.FC = () => {
         targetUrl: targetUrl.trim()
       });
     } else {
-      const defaultFolder = isVid ? (settings.defaultVideoFolder || 'Extraídos') : (settings.defaultAlbumFolder || 'Geral');
+      const defaultFolder = isVid ? (settings.defaultVideoFolder || (isEn ? 'Extracted' : 'Extraídos')) : (settings.defaultAlbumFolder || (isEn ? 'General' : 'Geral'));
       handleStartExtraction(targetUrl.trim(), defaultFolder);
     }
   };
@@ -422,7 +422,7 @@ export const ExtractorView: React.FC = () => {
         mode: 'batch'
       });
     } else {
-      const defaultFolder = hasVid ? (settings.defaultVideoFolder || 'Extraídos') : (settings.defaultAlbumFolder || 'Geral');
+      const defaultFolder = hasVid ? (settings.defaultVideoFolder || (isEn ? 'Extracted' : 'Extraídos')) : (settings.defaultAlbumFolder || (isEn ? 'General' : 'Geral'));
       handleBatchExtraction(defaultFolder);
     }
   };
@@ -447,9 +447,6 @@ export const ExtractorView: React.FC = () => {
         {/* Decorative Ambient Background */}
         <div className="absolute top-0 right-0 -mr-20 -mt-20 w-80 h-80 bg-brand-500/15 rounded-full filter blur-3xl pointer-events-none"></div>
       </div>
-
-      {/* Real-time Telemetry Stats Bar */}
-      <TelemetryBar />
 
       {/* Main Extraction Form */}
       <div className="glass-panel p-6 rounded-3xl border border-border space-y-6">
@@ -485,12 +482,12 @@ export const ExtractorView: React.FC = () => {
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
               <Film size={13} className="text-brand-400" />
-              {t.mediaPromptQuestion || 'O que você deseja extrair deste link?'}
+              {t.mediaPromptQuestion || "What would you like to extract from this link?"}
             </span>
             {mediaTypeFilter === 'videos' && (
               <span className="px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/40 text-[10px] font-bold flex items-center gap-1 animate-pulse">
                 <Film size={11} />
-                <span>{t.videoModeActive || 'MODO VÍDEO ATIVO'}</span>
+                <span>{t.videoModeActive || "VIDEO MODE ACTIVE"}</span>
               </span>
             )}
             {mediaTypeFilter === 'gifs' && (
@@ -503,9 +500,9 @@ export const ExtractorView: React.FC = () => {
 
           <div className="flex flex-wrap gap-2">
             {([
-              { id: 'all', label: t.allMedia || 'Tudo (Fotos, Vídeos, GIFs)', icon: Globe, color: 'brand' },
+              { id: 'all', label: t.allMedia || "All (Photos, Videos, GIFs)", icon: Globe, color: 'brand' },
               { id: 'images', label: t.onlyPhotos || 'Apenas Fotos', icon: Image, color: 'emerald' },
-              { id: 'videos', label: t.onlyVideos || 'Apenas Vídeos', icon: Film, color: 'violet' },
+              { id: 'videos', label: t.onlyVideos || "Videos Only", icon: Film, color: 'violet' },
               { id: 'gifs', label: t.onlyGifs || 'Apenas GIFs Animados', icon: Clapperboard, color: 'amber' },
             ] as { id: MediaExtractFilter; label: string; icon: any; color: string }[]).map(opt => {
               const isActive = mediaTypeFilter === opt.id;
@@ -650,8 +647,8 @@ export const ExtractorView: React.FC = () => {
         }
         currentFolder={
           (mediaTypeFilter === 'videos' || (folderModalState.targetUrl && isVideoKeyword(folderModalState.targetUrl)))
-            ? (settings.defaultVideoFolder || 'Extraídos')
-            : (settings.defaultAlbumFolder || 'Geral')
+            ? (settings.defaultVideoFolder || (isEn ? 'Extracted' : 'Extraídos'))
+            : (settings.defaultAlbumFolder || (isEn ? 'General' : 'Geral'))
         }
         mediaType={
           (mediaTypeFilter === 'videos' || (folderModalState.targetUrl && isVideoKeyword(folderModalState.targetUrl)))

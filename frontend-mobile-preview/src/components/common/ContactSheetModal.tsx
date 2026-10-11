@@ -3,7 +3,7 @@ import { X, Image as ImageIcon, Download, LayoutGrid, Check } from 'lucide-react
 import { useAppStore } from '../../store/useAppStore';
 
 export const ContactSheetModal: React.FC = () => {
-  const { contactSheetOpen, setContactSheetOpen, albums, activeAlbumId } = useAppStore();
+  const { contactSheetOpen, setContactSheetOpen, albums, activeAlbumId, settings } = useAppStore();
   const [layout, setLayout] = useState<'2x2' | '3x3' | 'polaroid'>('3x3');
   const [showMetadata, setShowMetadata] = useState(true);
 
@@ -78,7 +78,7 @@ export const ContactSheetModal: React.FC = () => {
                 Gerador de Folha de Contato (Contact Sheet)
               </h3>
               <p className="text-[10px] sm:text-[11px] text-slate-400 truncate">
-                Monte montagens fotográficas e catálogos em alta resolução
+                {settings.language === "en-US" ? "Create photographic contact sheets and high-resolution catalogs" : "Monte montagens fotográficas e catálogos em alta resolução"}
               </p>
             </div>
           </div>
@@ -106,7 +106,7 @@ export const ContactSheetModal: React.FC = () => {
                   </p>
                 </div>
                 <span className="text-[9px] sm:text-[10px] font-black font-mono px-2 py-0.5 border border-zinc-900 shrink-0">
-                  Resolução Original
+                  {settings.language === "en-US" ? "Original Resolution" : "Resolução Original"}
                 </span>
               </div>
 
@@ -143,7 +143,7 @@ export const ContactSheetModal: React.FC = () => {
           <div className="w-full md:w-64 border-t md:border-t-0 md:border-l border-border p-3 sm:p-4 bg-surface-elevated/60 space-y-3.5 text-xs shrink-0">
             <div>
               <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                Layout de Diagramação
+                {settings.language === "en-US" ? "Page Layout Grid" : "Layout de Diagramação"}
               </label>
               <div className="grid grid-cols-3 gap-1.5 font-mono text-xs">
                 <button

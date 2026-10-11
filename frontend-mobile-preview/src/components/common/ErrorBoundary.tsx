@@ -37,6 +37,15 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   public render() {
+    const isEn = typeof window !== 'undefined' && (() => {
+      try {
+        const s = localStorage.getItem('imagex_settings');
+        return s ? JSON.parse(s).language === 'en-US' : false;
+      } catch (_) {
+        return false;
+      }
+    })();
+
     if (this.state.hasError) {
       if (typeof this.props.fallback === 'function') {
         return this.props.fallback(this.state.error, this.handleReset);
@@ -53,9 +62,9 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
 
             <div className="space-y-1.5">
-              <h2 className="text-lg sm:text-xl font-bold text-white">Ops, algo deu errado</h2>
+              <h2 className="text-lg sm:text-xl font-bold text-white">{isEn ? "Oops, something went wrong" : "Ops, algo deu errado"}</h2>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Um erro inesperado foi capturado com segurança pelo sistema de proteção para evitar travamento da tela.
+                {isEn ? "An unexpected error was safely caught to prevent application crash." : "Um erro inesperado foi capturado com segurança pelo sistema de proteção para evitar travamento da tela."}
               </p>
             </div>
 
@@ -72,7 +81,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-white/10 transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RotateCcw size={14} />
-                Recuperar
+                {isEn ? "Recover" : "Recuperar"}
               </button>
               <button
                 type="button"
@@ -80,7 +89,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 className="flex-1 py-2.5 px-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg shadow-brand-600/30 transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RefreshCw size={14} />
-                Recarregar
+                {isEn ? "Reload" : "Recarregar"}
               </button>
             </div>
           </div>

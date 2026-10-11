@@ -37,7 +37,11 @@ export class BackendApiClient {
       const res = await fetch(`/api/albums/${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
       if (!res.ok) return null;
       const data = await res.json();
-      return this.mapBackendAlbumToFrontend(data);
+      const rawAlbum = data.album || data;
+      const mapped = this.mapBackendAlbumToFrontend(rawAlbum);
+      if (data.sync_stats || data.stats) mapped.syncStats = data.sync_stats || data.stats;
+      if (data.sync_message || data.message) mapped.syncMessage = data.sync_message || data.message;
+      return mapped;
     } catch {
       return null;
     }
@@ -216,6 +220,7 @@ export class BackendApiClient {
       model?: string;
       ollamaUrl?: string;
       conversationHistory?: Array<{ role: string; content: string }>;
+      context?: Record<string, any>;
     }
   ): Promise<{
     reply: string;
@@ -223,6 +228,10 @@ export class BackendApiClient {
     model?: string;
     error_type?: string;
     can_fallback?: boolean;
+    media_items?: any[];
+    executed_tools?: any[];
+    thought_chain?: string[];
+    client_action?: any;
   } | null> {
     try {
       const payload: any = { message };
@@ -230,6 +239,7 @@ export class BackendApiClient {
       if (options?.model) payload.model = options.model;
       if (options?.ollamaUrl) payload.ollama_url = options.ollamaUrl;
       if (options?.conversationHistory) payload.conversation_history = options.conversationHistory;
+      if (options?.context) payload.context = options.context;
 
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -238,7 +248,7 @@ export class BackendApiClient {
       });
       if (!res.ok) {
         return {
-          reply: `Erro no servidor (HTTP ${res.status}). Verifique se o backend está ativo.`,
+          reply: `Server error (HTTP ${res.status}). Ensure backend is active.`,
           error_type: 'http_error',
           can_fallback: true
         };
@@ -249,11 +259,15 @@ export class BackendApiClient {
         provider: data.provider,
         model: data.model,
         error_type: data.error_type,
-        can_fallback: data.can_fallback
+        can_fallback: data.can_fallback,
+        media_items: data.media_items || [],
+        executed_tools: data.executed_tools || [],
+        thought_chain: data.thought_chain || [],
+        client_action: data.client_action || null
       };
     } catch (e: any) {
       return {
-        reply: `Erro de conexão com o servidor backend: ${e?.message || e}`,
+        reply: `Connection error with backend server: ${e?.message || e}`,
         error_type: 'network_error',
         can_fallback: true
       };
@@ -284,7 +298,7 @@ export class BackendApiClient {
         endpoint: url || 'http://localhost:11434',
         installedModels: [],
         lastChecked: Date.now(),
-        error: e?.message || 'Falha na conexão'
+        error: e?.message || 'Connection failed'
       };
     }
   }
@@ -572,9 +586,10 @@ export class BackendApiClient {
   /**
    * Fetches all videos and folders from data/videos/ on disk.
    */
-  async fetchVideos(): Promise<{ videos: VideoItem[]; folders: VideoFolder[] }> {
+  async fetchVideos(healThumbnails: boolean = false): Promise<{ videos: VideoItem[]; folders: VideoFolder[] }> {
     try {
-      const res = await fetch('/api/videos', { cache: 'no-store' });
+      const url = healThumbnails ? '/api/videos?heal=true' : '/api/videos';
+      const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) return { videos: [], folders: [] };
       const data = await res.json();
       return {
@@ -1031,14 +1046,13 @@ export class BackendApiClient {
       ? raw.source_page.replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0]
       : 'web-source';
 
-    const getSafeUrl = (url: string) => {
+    const getSafeUrl = (url: string, width?: number) => {
       if (!url || !url.startsWith('http')) return url;
       if (url.includes('unsplash.com')) return url;
-      // CDNs abertos com Access-Control-Allow-Origin: * não precisam de proxy (evita sobrecarregar o Render e imagens pretas)
-      if (/(?:static-ca-cdn|cdni\.[a-z0-9-]+\.com)/i.test(url)) {
-        return url;
-      }
-      return `/api/proxy-image?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(raw.source_page || url)}`;
+      // Imagens públicas genéricas externas (ex: placeholders unsplash) não precisam de proxy
+      // Toda e qualquer imagem da web de qualquer site passa pelo proxy para evitar CORS, hotlink e garantir cache SSD
+      const wParam = width ? `&w=${width}` : '';
+      return `/api/proxy-image?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(raw.source_page || url)}${wParam}`;
     };
 
     const getSafeVideoUrl = (url?: string) => {
@@ -1086,11 +1100,11 @@ export class BackendApiClient {
 
       const isResolved = !!(img.original_url && img.resolution_method && img.resolution_method !== 'none' && img.validation_status !== 'UNRESOLVED');
       const methodLabel = img.resolution_method === 'individual_page'
-        ? 'Página Individual (HD)'
+        ? 'Individual Page (HD)'
         : img.resolution_method === 'verified_cdn_candidate'
         ? 'CDN Original Nativo'
         : img.resolution_method === 'speculative_probe'
-        ? 'Indução Neural'
+        ? 'Neural Induction'
         : isResolved
         ? 'Original HD'
         : 'Miniatura DOM';
@@ -1121,7 +1135,7 @@ export class BackendApiClient {
       // Clean page/album title for clean fallbacks
       const baseCleanTitle = (raw.title || raw.original_title || '')
         .replace(/\s*[-–|•]\s*(?:watch online.*|[a-zA-Z0-9_-]+\s+video\s+search|[a-zA-Z0-9_-]+\.[a-zA-Z]{2,}).*$/i, '')
-        .trim() || raw.title || 'Mídia';
+        .trim() || raw.title || 'Media';
 
       let resolvedTitle = '';
       if (img.title && !/^(vídeo|video|foto|photo|imagem|image|gif)\s*#?\d+$/i.test(img.title.trim())) {
@@ -1148,7 +1162,7 @@ export class BackendApiClient {
         id: `real-img-${raw.session_id || 'album'}-${idx}`,
         title: resolvedTitle,
         originalUrl: safeOrigUrl,
-        thumbnailUrl: getSafeUrl(thumb),
+        thumbnailUrl: getSafeUrl(thumb, 360),
         previewUrl: safePreviewUrl,
         rawOriginalUrl: orig,
         rawThumbnailUrl: thumb,
@@ -1209,17 +1223,17 @@ export class BackendApiClient {
 
     return {
       id: raw.session_id || raw.album_id || `album-${Date.now()}`,
-      title: raw.title || raw.original_title || 'Álbum Extraído',
+      title: raw.title || raw.original_title || 'Extracted Album',
       sourceUrl: raw.source_page || '',
       sourceDomain: sourceDomain,
       createdAt: createdAt,
       updatedAt: updatedAt,
-      coverImage: getSafeUrl(effectiveCoverUrl),
+      coverImage: getSafeUrl(effectiveCoverUrl, 360),
       rawCoverImage: effectiveCoverUrl || undefined,
       coverColorPalette: (raw.cover_color_palette && Array.isArray(raw.cover_color_palette) && raw.cover_color_palette.length > 0)
         ? raw.cover_color_palette
         : (images[0]?.colorPalette?.length ? images[0].colorPalette : undefined),
-      imageCount: images.length || raw.total_images || 0,
+      imageCount: raw.total_images || images.length || 0,
       resolvedOriginalCount: images.length,
       totalSizeBytes: images.reduce((acc, i) => acc + i.fileSizeBytes, 0),
       aiModel: raw.metadata?.model_used || 'Qwen 2.5:32b',
@@ -1238,7 +1252,9 @@ export class BackendApiClient {
       gifCount: raw.gif_count ?? raw.metadata?.gif_count ?? images.filter(i => i.mediaType === 'gif' || i.isAnimated).length,
       sourceOrigin: isLocalOrigin ? 'local' : 'remote',
       folder: raw.folder || raw.metadata?.folder || 'Geral',
-      isFavorite: raw.is_favorite ?? raw.isFavorite ?? raw.metadata?.is_favorite ?? false
+      isFavorite: raw.is_favorite ?? raw.isFavorite ?? raw.metadata?.is_favorite ?? false,
+      syncStats: raw.sync_stats || raw.syncStats,
+      syncMessage: raw.sync_message || raw.syncMessage
     };
   }
 
@@ -1265,10 +1281,10 @@ export class BackendApiClient {
         })
       });
       const data = await res.json();
-      if (!res.ok) return { success: false, error: data.detail || 'Erro ao salvar vídeo' };
+      if (!res.ok) return { success: false, error: data.detail || 'Error saving video' };
       return { success: true, job_id: data.job_id, video: data.video };
     } catch (err) {
-      return { success: false, error: 'Falha na conexão com o servidor' };
+      return { success: false, error: 'Connection to server failed' };
     }
   }
 
@@ -1283,10 +1299,10 @@ export class BackendApiClient {
         body: JSON.stringify({ url, max_items: maxItems })
       });
       const data = await res.json();
-      if (!res.ok) return { success: false, error: data.detail || 'Erro ao escanear página', page_title: '', suggested_folder: '', total_found: 0, album_id: '', videos: [] };
+      if (!res.ok) return { success: false, error: data.detail || 'Error scanning page', page_title: '', suggested_folder: '', total_found: 0, album_id: '', videos: [] };
       return data;
     } catch (err: any) {
-      return { success: false, error: err?.message || 'Falha ao conectar ao servidor para escanear a página', page_title: '', suggested_folder: '', total_found: 0, album_id: '', videos: [] };
+      return { success: false, error: err?.message || 'Failed to connect to server to scan page', page_title: '', suggested_folder: '', total_found: 0, album_id: '', videos: [] };
     }
   }
 
@@ -1320,7 +1336,7 @@ export class BackendApiClient {
         })
       });
       const data = await res.json();
-      if (!res.ok) return { success: false, error: data.detail || 'Erro ao salvar vídeos em lote' };
+      if (!res.ok) return { success: false, error: data.detail || 'Error batch saving videos' };
       return data;
 
     } catch (err) {
@@ -1333,7 +1349,7 @@ export class BackendApiClient {
    */
   async getKeysStatus(): Promise<{
     gemini: { is_set: boolean; masked_key: string; is_connected: boolean; error: string | null };
-    huggingface: { is_set: boolean; masked_token: string; repo_id: string; is_connected: boolean };
+    huggingface: { is_set: boolean; masked_token: string; repo_id: string; is_connected: boolean; error?: string | null };
   } | null> {
     try {
       const res = await fetch('/api/settings/keys');
@@ -1353,7 +1369,7 @@ export class BackendApiClient {
     hf_dataset_repo?: string;
   }): Promise<{
     gemini: { is_set: boolean; masked_key: string; is_connected: boolean; error: string | null };
-    huggingface: { is_set: boolean; masked_token: string; repo_id: string; is_connected: boolean };
+    huggingface: { is_set: boolean; masked_token: string; repo_id: string; is_connected: boolean; error?: string | null };
   } | null> {
     try {
       const res = await fetch('/api/settings/keys', {
@@ -1365,6 +1381,22 @@ export class BackendApiClient {
       return await res.json();
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Sincroniza e restaura sob demanda todos os álbuns, jobs e vídeos do Hugging Face.
+   */
+  async syncHfData(): Promise<{ success: boolean; message: string; details?: any; error?: string }> {
+    try {
+      const res = await fetch('/api/settings/hf/sync', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, message: data.detail || 'Erro na sincronização', error: data.detail };
+      }
+      return data;
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Erro de conexão', error: err.message };
     }
   }
 
@@ -1383,17 +1415,17 @@ export class BackendApiClient {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Falha ao salvar álbuns na biblioteca');
+        throw new Error(err.detail || 'Failed to save albums to library');
       }
       const data = await res.json();
       return {
         success: true,
         queued: data.queued || albums.length,
         target_folder: data.target_folder || folder || 'Geral',
-        message: data.message || 'Álbuns enfileirados com sucesso!'
+        message: data.message || 'Albums queued successfully!'
       };
     } catch (err: any) {
-      return { success: false, queued: 0, message: err.message || 'Erro de conexão com o servidor' };
+      return { success: false, queued: 0, message: err.message || 'Server connection error' };
     }
   }
 
@@ -1459,7 +1491,7 @@ export class BackendApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ album_ids: albumIds, target_folder: targetFolder }),
       });
-      if (!res.ok) throw new Error('Falha ao mover álbuns');
+      if (!res.ok) throw new Error('Failed to move albums');
       return await res.json();
     } catch {
       return { success: false, moved: 0, folders: [] };
@@ -1481,7 +1513,7 @@ export class BackendApiClient {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Falha ao gerar arquivo ZIP dos álbuns.');
+        throw new Error(err.detail || 'Failed to generate albums ZIP file.');
       }
       
       const blob = await res.blob();
@@ -1555,6 +1587,29 @@ export class BackendApiClient {
         message: 'Falha ao reparar paletas',
         error: err.message || String(err)
       };
+    }
+  }
+
+  /**
+   * Salva um arquivo diretamente na pasta Downloads do computador.
+   * Contorna bloqueios de download do WebView2 no executável Windows.
+   */
+
+  async downloadToDisk(url: string, filename?: string, openFolder: boolean = false): Promise<{ success: boolean; filePath?: string; filename?: string; error?: string }> {
+    try {
+      const res = await fetch('/api/system/download-to-disk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, filename, open_folder: openFolder })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return { success: false, error: err.detail || 'Erro ao salvar arquivo no disco.' };
+      }
+      const data = await res.json();
+      return { success: true, filePath: data.file_path, filename: data.filename };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Connection failure to local backend.' };
     }
   }
 }

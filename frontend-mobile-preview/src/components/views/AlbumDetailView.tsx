@@ -25,16 +25,24 @@ import {
   Layers,
   Eye,
   AlertTriangle,
-  Maximize2
+  Maximize2,
+  Heart,
+  FolderHeart,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { useAppStore, triggerJobsPollingLoop } from '../../store/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { backendApi } from '../../services/realApi';
 import { translations } from '../../i18n/translations';
 import { formatFileSize } from '../../utils/formatters';
 import { FolderSelectModal } from '../common/FolderSelectModal';
 import { SavedRedirectBadge } from '../common/SavedRedirectBadge';
-import { CHROMATIC_PALETTE_COLORS, matchesPaletteFuzzy, colorPaletteCache, extractDominantColors } from '../../services/colorExtractor';
+import { CHROMATIC_PALETTE_COLORS, matchesPaletteFuzzy, colorPaletteCache } from '../../services/colorExtractor';
 import { ColorFilterPopover } from '../common/ColorFilterPopover';
+import { ImageItem, Album, ExtractionJob } from '../../types';
+import { preloadSingleImage } from '../../hooks/useImagePreloader';
+import { ModalPortal } from '../common/ModalPortal';
 
 export const getProxiedStreamUrl = (rawUrl?: string, referer?: string): string => {
   if (!rawUrl) return '';
@@ -169,6 +177,607 @@ const InlineStreamPlayer: React.FC<{
   );
 };
 
+const getMasonryColsClass = (cols: number): string => {
+  switch (cols) {
+    case 1: return 'columns-1';
+    case 2: return 'columns-1 sm:columns-2';
+    case 3: return 'columns-1 sm:columns-2 lg:columns-3';
+    case 4: return 'columns-2 sm:columns-3 lg:columns-4';
+    case 5: return 'columns-2 sm:columns-3 lg:columns-5';
+    default: return 'columns-2 sm:columns-4 lg:columns-6';
+  }
+};
+
+const getGridColsClass = (cols: number): string => {
+  switch (cols) {
+    case 1: return 'grid-cols-1';
+    case 2: return 'grid-cols-1 sm:grid-cols-2';
+    case 3: return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+    case 4: return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4';
+    case 5: return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5';
+    default: return 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-6';
+  }
+};
+
+const AlbumMediaCard: React.FC<{
+  img: ImageItem;
+  idx: number;
+  album: Album;
+  isSelected: boolean;
+  cardViewMode: 'adaptive' | 'contain' | 'masonry' | 'standard';
+  isInlinePlaying: boolean;
+  refreshingStreamId: string | null;
+  savingVideoId: string | null;
+  coverUpdatingId: string | null;
+  jobs: ExtractionJob[];
+  toggleSelectImage: (id: string) => void;
+  toggleFavoriteImage: (albumId: string, imageId: string) => void;
+  openLightbox: (img: ImageItem, album: Album, originRect?: { x: number; y: number; width: number; height: number }) => void;
+  toggleInlinePlay: (id: string) => void;
+  closeInlinePlay: (id: string) => void;
+  handleRefreshSingleVideo: (img: ImageItem) => void;
+  handleInitiateSaveSingleVideo: (img: ImageItem) => void;
+  setActivePlayingVideo: (video: any) => void;
+  setAlbumCover: (albumId: string, url: string) => Promise<any>;
+  setCoverUpdatingId: (id: string | null) => void;
+  handleOpenRename: (img: ImageItem) => void;
+  removeImagesFromAlbum: (albumId: string, imageIds: string[]) => void;
+  addNotification: (notif: any) => void;
+  checkItemSavedStatus: (params: any) => any;
+  getVideoResolutionInfo: (img: any) => { label: string; dimensions: string; badgeClass: string };
+}> = React.memo(({
+  img,
+  idx,
+  album,
+  isSelected,
+  cardViewMode,
+  isInlinePlaying,
+  refreshingStreamId,
+  savingVideoId,
+  coverUpdatingId,
+  jobs,
+  toggleSelectImage,
+  toggleFavoriteImage,
+  openLightbox,
+  toggleInlinePlay,
+  closeInlinePlay,
+  handleRefreshSingleVideo,
+  handleInitiateSaveSingleVideo,
+  setActivePlayingVideo,
+  setAlbumCover,
+  setCoverUpdatingId,
+  handleOpenRename,
+  removeImagesFromAlbum,
+  addNotification,
+  checkItemSavedStatus,
+  getVideoResolutionInfo,
+}) => {
+  const isEn = useAppStore((state) => state.settings.language === 'en-US');
+  const [localDims, setLocalDims] = useState<{ w: number; h: number } | null>(null);
+
+  const isVideo = img.mediaType === 'video' || !!img.videoUrl || !!(img as any).videoStreamUrl || !!(img as any).is_video || /\.(mp4|webm|m4v)(\?|$)/i.test(img.originalUrl || '');
+  const rawVideoLink = img.videoUrl || (img as any).videoStreamUrl || (isVideo ? img.originalUrl : undefined);
+  const videoLink = getProxiedStreamUrl(rawVideoLink, (img as any).sourcePage || album.sourceUrl);
+  const isGif = img.mediaType === 'gif' || img.isAnimated || img.format === 'gif' || img.format === 'webp' || /\.(gif|webp)(\?|$)/i.test(img.originalUrl || '');
+
+  const w = img.width || localDims?.w || 0;
+  const h = img.height || localDims?.h || 0;
+
+  let containerAspectClass = 'aspect-[4/5]';
+  let imageFitClass = 'object-cover';
+
+  if (cardViewMode === 'adaptive') {
+    if (isVideo || isGif) {
+      containerAspectClass = 'aspect-video';
+      imageFitClass = 'object-contain bg-slate-950';
+    } else {
+      containerAspectClass = 'aspect-[4/5]';
+      imageFitClass = 'object-cover';
+    }
+  } else if (cardViewMode === 'contain') {
+    containerAspectClass = 'aspect-video';
+    imageFitClass = 'object-contain bg-slate-950';
+  } else if (cardViewMode === 'masonry') {
+    containerAspectClass = 'w-full';
+    imageFitClass = 'w-full h-auto object-contain bg-slate-950/80';
+  } else if (cardViewMode === 'standard') {
+    containerAspectClass = 'aspect-[4/5]';
+    imageFitClass = 'object-cover';
+  }
+
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleMouseEnter = () => {
+    if (!isVideo) {
+      const orig = img.originalUrl || img.rawOriginalUrl;
+      if (orig) {
+        if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = setTimeout(() => {
+          preloadSingleImage(orig);
+        }, 220); // Debounce de 220ms: evita disparos massivos ao deslizar o mouse rapidamente
+      }
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+  };
+
+  const handleCardClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    handleMouseLeave();
+    if (isVideo && videoLink) {
+      toggleInlinePlay(img.id);
+    } else {
+      const rect = e.currentTarget.getBoundingClientRect();
+      openLightbox(img, album, {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      });
+    }
+  };
+
+  const resLabel = w >= 3840 ? 'UHD' : w >= 2560 ? '2K' : w >= 1920 ? 'FHD' : (w > 0 ? 'HD' : '');
+
+  return (
+    <div
+      onClick={handleCardClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      className={`group relative gpu-album-card bg-slate-900/90 rounded-2xl border overflow-hidden cursor-pointer transition-all duration-300 hover:shadow-card-elevated flex flex-col justify-between ${
+        cardViewMode === 'masonry' ? 'break-inside-avoid mb-3 sm:mb-4' : ''
+      } ${
+        isSelected
+          ? 'border-brand-500 ring-2 ring-brand-500/50 shadow-glow-brand'
+          : isVideo
+          ? 'border-violet-500/30 hover:border-violet-500/60'
+          : isGif
+          ? 'border-amber-500/30 hover:border-amber-500/60'
+          : 'border-border hover:border-brand-500/40'
+      }`}
+    >
+      <div className={`relative ${containerAspectClass} overflow-hidden bg-slate-950 flex items-center justify-center`}>
+        {isVideo && videoLink ? (
+          isInlinePlaying ? (
+            <div
+              className="w-full h-full relative bg-black flex items-center justify-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <InlineStreamPlayer
+                key={`${img.id}-${img.videoUrl || img.originalUrl || ''}`}
+                url={videoLink}
+                poster={img.posterUrl || img.thumbnailUrl}
+                referer={(img as any).sourcePage || album.sourceUrl}
+                onRefresh={() => handleRefreshSingleVideo(img)}
+                isRefreshing={refreshingStreamId === img.id}
+              />
+
+              {(img.candidateId || img.id) && (
+                <button
+                  type="button"
+                  onClick={() => handleRefreshSingleVideo(img)}
+                  disabled={refreshingStreamId === img.id}
+                  className="absolute top-2 right-11 z-30 p-1.5 rounded-full bg-violet-600/90 text-white hover:bg-violet-500 border border-violet-400/40 transition-all shadow-lg disabled:opacity-50"
+                  title="Refresh video link (if expired)"
+                >
+                  <RefreshCw size={14} className={refreshingStreamId === img.id ? 'animate-spin' : ''} />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeInlinePlay(img.id);
+                  let rawVidSrc = img.rawOriginalUrl || img.originalUrl || videoLink || '';
+                  let unwrapCount = 0;
+                  while (rawVidSrc.includes('/api/proxy-video-stream') && rawVidSrc.includes('url=') && unwrapCount < 5) {
+                    unwrapCount++;
+                    const m = rawVidSrc.match(/[?&]url=([^&]+)/);
+                    if (m) rawVidSrc = decodeURIComponent(m[1]);
+                    else break;
+                  }
+                  let defaultRef = '';
+                  try {
+                    defaultRef = new URL(album.sourceUrl || rawVidSrc).origin;
+                  } catch {
+                    defaultRef = '';
+                  }
+                  const vRef = (img as any).sourcePage || album.sourceUrl || defaultRef;
+                  setActivePlayingVideo({
+                    id: img.id,
+                    title: img.title || 'Vídeo',
+                    filename: `${img.title || 'video'}.mp4`,
+                    folder: album.title || 'Álbum',
+                    fileSizeBytes: img.fileSizeBytes || (img as any).file_size || 0,
+                    format: 'MP4',
+                    isFavorite: false,
+                    createdAt: new Date().toISOString(),
+                    relPath: '',
+                    streamUrl: videoLink,
+                    downloadUrl: `/api/proxy-video-stream?url=${encodeURIComponent(rawVidSrc)}&referer=${encodeURIComponent(vRef)}&download=true&filename=${encodeURIComponent(img.title || 'video')}`,
+                    thumbnailUrl: img.posterUrl || img.thumbnailUrl || '',
+                    sourceUrl: vRef,
+                    width: img.width,
+                    height: img.height,
+                    durationSeconds: img.durationSeconds || (img as any).duration_seconds
+                  });
+                }}
+                className="absolute top-2 right-20 z-30 p-1.5 rounded-full bg-black/80 text-white hover:bg-violet-600 border border-white/30 transition-all shadow-lg"
+                title="Expand Video (Cinema Mode)"
+              >
+                <Maximize2 size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => closeInlinePlay(img.id)}
+                className="absolute top-2 right-2 z-30 p-1.5 rounded-full bg-black/80 text-white hover:bg-white hover:text-black border border-white/30 transition-all shadow-lg"
+                title="Close Player"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ) : (
+            <div className="w-full h-full relative">
+              <img
+                src={img.posterUrl || img.thumbnailUrl}
+                alt={img.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/40 group-hover:bg-black/20 transition-colors">
+                <div className="w-12 h-12 rounded-full bg-violet-600/90 text-white shadow-glow-brand flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Play size={22} className="translate-x-0.5" />
+                </div>
+              </div>
+            </div>
+          )
+        ) : (
+          <img
+            src={isGif ? (img.originalUrl || img.thumbnailUrl) : img.thumbnailUrl}
+            alt={img.title}
+            loading={idx < 8 ? "eager" : "lazy"}
+            {...({ fetchPriority: idx < 2 ? 'high' : undefined } as any)}
+            decoding="async"
+            onLoad={(e) => {
+              // Lightweight passive dimension recording without state re-render storm
+              const nw = e.currentTarget.naturalWidth;
+              const nh = e.currentTarget.naturalHeight;
+              if (nw > 0 && nh > 0 && (!img.width || img.width === 0)) {
+                img.width = nw;
+                img.height = nh;
+                img.aspectRatio = nw > nh ? '16:9' : nw < nh ? '2:3' : '1:1';
+              }
+            }}
+            className={`w-full h-full ${imageFitClass} group-hover:scale-105 transition-transform duration-500`}
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              const target = e.currentTarget;
+              if (img.rawThumbnailUrl && target.src !== img.rawThumbnailUrl) {
+                target.src = img.rawThumbnailUrl;
+              }
+            }}
+          />
+        )}
+        {!isInlinePlaying && (
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+        )}
+
+        {(img as any).isFavorite && (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleFavoriteImage(album.id, img.id);
+            }}
+            className="absolute bottom-2.5 right-2.5 z-20 p-1.5 rounded-full bg-rose-600/90 text-white shadow-lg backdrop-blur-md hover:bg-rose-500 cursor-pointer animate-scale-up"
+            title="Favorited image • Click to unfavorite"
+          >
+            <Heart size={12} className="fill-white" />
+          </div>
+        )}
+
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleSelectImage(img.id);
+          }}
+          className="absolute top-2.5 left-2.5 z-10"
+        >
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => {}}
+            className="w-4 h-4 rounded text-brand-500 cursor-pointer"
+          />
+        </div>
+
+        {isVideo && !isInlinePlaying && (() => {
+          const sInfo = checkItemSavedStatus({
+            url: img.rawOriginalUrl || img.videoUrl || img.originalUrl,
+            title: img.title,
+            mediaType: 'video'
+          });
+          if (!sInfo.isSaved) return null;
+          return (
+            <div className="absolute top-2.5 left-9 z-10">
+              <SavedRedirectBadge savedInfo={sInfo} />
+            </div>
+          );
+        })()}
+
+        {!isInlinePlaying && (
+          isVideo ? (() => {
+            const vInfo = getVideoResolutionInfo(img);
+            const is4k = vInfo.label.includes('4K');
+            return (
+              <span className={`absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full backdrop-blur-md border text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-md group-hover:opacity-0 transition-opacity ${vInfo.badgeClass}`}>
+                <Film size={11} className={is4k ? 'text-amber-400' : 'text-violet-300'} />
+                {vInfo.label}
+              </span>
+            );
+          })() : isGif ? (
+            <span className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-amber-950/90 backdrop-blur-md border border-amber-500/50 text-[10px] font-mono font-bold text-amber-300 flex items-center gap-1.5 group-hover:opacity-0 transition-opacity shadow-md">
+              <Clapperboard size={11} className="text-amber-400" />
+              <span>GIF{img.width && img.height ? ` • ${img.width}×${img.height}` : ''}{img.fileSizeBytes ? ` • ${formatFileSize(img.fileSizeBytes)}` : ''}</span>
+            </span>
+          ) : (
+            <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md border border-white/10 text-[9px] font-mono font-bold text-emerald-400 group-hover:opacity-0 transition-opacity">
+              {w > 0 && h > 0 ? `${w}×${h}${resLabel ? ` • ${resLabel}` : ''}` : (img.fileSizeBytes ? formatFileSize(img.fileSizeBytes) : 'Detectando...')}
+            </span>
+          )
+        )}
+
+        {!isInlinePlaying && (
+          <div className="absolute top-2.5 right-2.5 flex items-center gap-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+            {isVideo && (img.candidateId || img.id) && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRefreshSingleVideo(img);
+                }}
+                disabled={refreshingStreamId === img.id}
+                className="p-1.5 rounded-lg bg-cyan-900/90 hover:bg-cyan-800 text-cyan-200 hover:text-white border border-cyan-500/40 transition-colors shadow-sm disabled:opacity-50"
+                title="Renovar link de stream (expirado)"
+              >
+                <RefreshCw size={13} className={refreshingStreamId === img.id ? 'animate-spin' : ''} />
+              </button>
+            )}
+            {isVideo && img.videoUrl && (() => {
+              const isSavingThisVideo = savingVideoId === img.id || jobs.some(j =>
+                j.status === 'active' &&
+                (j.mode === 'video_save' || (j.mode as string) === 'video_downloader') &&
+                (j.url === (img.rawOriginalUrl || img.videoUrl) || (img.title && j.title.toLowerCase().includes(img.title.toLowerCase())))
+              );
+              const savedStatus = checkItemSavedStatus({
+                url: img.rawOriginalUrl || img.videoUrl || img.originalUrl,
+                title: img.title,
+                mediaType: 'video'
+              });
+
+              return (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isSavingThisVideo) return;
+                    handleInitiateSaveSingleVideo(img);
+                  }}
+                  disabled={isSavingThisVideo}
+                  className={`p-1.5 rounded-lg border transition-colors shadow-sm disabled:opacity-80 ${
+                    isSavingThisVideo
+                      ? 'bg-violet-900/90 text-violet-200 border-violet-500/60'
+                      : savedStatus.isSaved
+                      ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border-emerald-500/40'
+                      : 'bg-violet-900/90 hover:bg-violet-800 text-violet-200 hover:text-white border border-violet-500/40'
+                  }`}
+                  title={
+                    isSavingThisVideo
+                      ? 'Saving in background... Follow progress in Task Management'
+                      : savedStatus.isSaved
+                      ? ('Video saved in folder "' + savedStatus.folder + '"')
+                      : 'Save to Video Gallery'
+                  }
+                >
+                  {isSavingThisVideo ? (
+                    <Loader2 size={13} className="animate-spin text-violet-300" />
+                  ) : savedStatus.isSaved ? (
+                    <Check size={13} className="text-emerald-400" />
+                  ) : (
+                    <Save size={13} />
+                  )}
+                </button>
+              );
+            })()}
+
+            {(() => {
+              const imgTargetUrl = img.rawOriginalUrl || img.originalUrl || img.rawThumbnailUrl || img.thumbnailUrl;
+              const isCurrentCover = !!(
+                (album.rawCoverImage && (img.rawOriginalUrl === album.rawCoverImage || img.originalUrl === album.rawCoverImage || img.rawThumbnailUrl === album.rawCoverImage || img.thumbnailUrl === album.rawCoverImage)) ||
+                (album.coverImage && (img.originalUrl === album.coverImage || img.thumbnailUrl === album.coverImage || img.rawOriginalUrl === album.coverImage))
+              );
+
+              return (
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (imgTargetUrl) {
+                      setCoverUpdatingId(img.id);
+                      await setAlbumCover(album.id, imgTargetUrl);
+                      setTimeout(() => setCoverUpdatingId(null), 1000);
+                    }
+                  }}
+                  disabled={coverUpdatingId === img.id}
+                  className={`p-1.5 rounded-lg border transition-all shadow-sm ${
+                    isCurrentCover
+                      ? 'bg-amber-500/90 hover:bg-amber-500 border-amber-400 text-white shadow-glow-brand'
+                      : 'bg-black/80 hover:bg-amber-600/80 text-slate-300 hover:text-white border-white/20'
+                  }`}
+                  title={isCurrentCover ? "This photo is the current gallery cover" : "Set as album cover in gallery"}
+                >
+                  {coverUpdatingId === img.id ? (
+                    <Loader2 size={13} className="animate-spin text-amber-300" />
+                  ) : (
+                    <BookmarkCheck size={13} className={isCurrentCover ? 'text-white' : 'text-amber-300'} />
+                  )}
+                </button>
+              );
+            })()}
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFavoriteImage(album.id, img.id);
+              }}
+              className={`p-1.5 rounded-lg border transition-all shadow-sm cursor-pointer ${
+                (img as any).isFavorite
+                  ? 'bg-rose-600 border-rose-400 text-white shadow-glow-brand'
+                  : 'bg-black/80 hover:bg-rose-600/80 text-slate-200 hover:text-white border-white/20'
+              }`}
+              title={(img as any).isFavorite ? "Remove image from Favorites" : "Favorite Image"}
+            >
+              <Heart size={13} className={(img as any).isFavorite ? 'fill-white text-white' : 'text-slate-300'} />
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenRename(img);
+              }}
+              className="p-1.5 rounded-lg bg-black/80 hover:bg-brand-600 text-slate-200 hover:text-white border border-white/20 transition-colors shadow-sm"
+              title={isVideo ? "Rename Video" : isGif ? "Rename GIF" : "Rename Photo"}
+            >
+              <Edit2 size={13} />
+            </button>
+            <button
+              onClick={async (e) => {
+                e.stopPropagation();
+                const ext = isVideo ? 'mp4' : isGif ? (img.format || 'gif') : (img.format || 'jpg');
+                let rawTitle = (img.title || (isVideo ? 'video' : isGif ? 'animacao' : 'foto')).trim();
+                if (rawTitle.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) {
+                  rawTitle = rawTitle.slice(0, -(ext.length + 1));
+                }
+                const fname = `${rawTitle}.${ext}`;
+                const targetUrl = isVideo
+                  ? (img.videoUrl || (img as any).videoStreamUrl || img.originalUrl)
+                  : (img.rawOriginalUrl || img.originalUrl || img.previewUrl || img.thumbnailUrl);
+
+                addNotification({
+                  type: 'info',
+                  title: isEn ? 'Downloading File' : 'Baixando Arquivo',
+                  message: `Saving "${fname}" directly to Downloads folder...`
+                });
+
+                const res = await backendApi.downloadToDisk(targetUrl || '', fname, true);
+                if (res.success) {
+                  addNotification({
+                    type: 'success',
+                    title: "Download Complete",
+                    message: `Saved successfully: "${res.filename || fname}".`
+                  });
+                } else {
+                  addNotification({
+                    type: 'error',
+                    title: isEn ? 'Download Failed' : 'Falha no Download',
+                    message: res.error || "Error saving file."
+                  });
+                }
+              }}
+              className="p-1.5 rounded-lg bg-black/80 hover:bg-black text-slate-200 hover:text-white border border-white/20 transition-colors shadow-sm cursor-pointer"
+              title={isVideo ? "Download MP4 Video" : isGif ? "Download GIF" : "Download Original Photo"}
+            >
+              <Download size={13} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm("Are you sure you want to remove this item from the album?")) {
+                  removeImagesFromAlbum(album.id, [img.id]);
+                }
+              }}
+              className="p-1.5 rounded-lg bg-black/80 hover:bg-rose-900/90 text-rose-300 hover:text-rose-100 border border-white/20 transition-colors shadow-sm"
+              title="Remove from Album"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )}
+
+        {(() => {
+          const isCurrentCover = !!(
+            (album.rawCoverImage && (img.rawOriginalUrl === album.rawCoverImage || img.originalUrl === album.rawCoverImage || img.rawThumbnailUrl === album.rawCoverImage || img.thumbnailUrl === album.rawCoverImage)) ||
+            (album.coverImage && (img.originalUrl === album.coverImage || img.thumbnailUrl === album.coverImage || img.rawOriginalUrl === album.coverImage))
+          );
+          if (!isCurrentCover || isInlinePlaying) return null;
+          return (
+            <span className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-full bg-amber-500/90 backdrop-blur-md border border-amber-400/50 text-[9px] font-bold text-white flex items-center gap-1 shadow-md z-10">
+              <Check size={10} className="stroke-[3]" /> Album Cover
+            </span>
+          );
+        })()}
+
+        {!isVideo && (
+          <div className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-mono text-amber-400 flex items-center gap-1 font-bold">
+            <Star size={10} className="fill-amber-400" />
+            {img.aestheticScore}
+          </div>
+        )}
+        {isVideo && img.durationSeconds && !isInlinePlaying && (
+          <div className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-mono text-slate-300 font-bold">
+            {Math.floor(img.durationSeconds / 60)}:{String(Math.round(img.durationSeconds % 60)).padStart(2, '0')}
+          </div>
+        )}
+      </div>
+
+      <div className="p-2.5 sm:p-3 text-xs">
+        <div className="flex items-center justify-between gap-1 group/title">
+          <h4
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenRename(img);
+            }}
+            className="font-semibold text-slate-100 truncate group-hover/title:text-brand-300 transition-colors cursor-pointer flex-1"
+            title={isEn ? "Click to rename this item" : "Clique para renomear este item"}
+          >
+            {img.title && img.title.startsWith('#') ? img.title : `#${idx + 1} ${img.title || (isVideo ? 'Vídeo' : 'Foto')}`}
+          </h4>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenRename(img);
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-brand-300 hover:bg-white/10 rounded transition-all shrink-0"
+            title="Renomear item"
+          >
+            <Edit2 size={11} />
+          </button>
+        </div>
+        <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mt-1.5 pt-1.5 border-t border-white/5">
+          {img.fileSizeBytes > 0 ? (
+            <span className="px-2 py-0.5 rounded-md bg-cyan-950/70 border border-cyan-500/30 text-cyan-300 font-mono text-[9px] font-bold flex items-center gap-1 shadow-sm">
+              <HardDrive size={10} className="text-cyan-400 shrink-0" />
+              {formatFileSize(img.fileSizeBytes)}
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-md bg-slate-800/80 border border-slate-700/50 text-slate-400 font-mono text-[9px] font-medium flex items-center gap-1 shadow-sm" title="File size pending sync">
+              <Clock size={10} className="text-slate-500 shrink-0" />
+              Pending
+            </span>
+          )}
+          <span className="px-1.5 py-0.5 rounded-md bg-surface-elevated/90 border border-border text-slate-300 font-mono text-[9px] flex items-center gap-1">
+            {isVideo
+              ? getVideoResolutionInfo(img).dimensions
+              : (w > 0 && h > 0 ? `${w}×${h}` : '-- × --')
+            }
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export const AlbumDetailView: React.FC = () => {
   const getVideoResolutionInfo = (img: any) => {
     let h = img.height || 0;
@@ -268,6 +877,8 @@ export const AlbumDetailView: React.FC = () => {
   const {
     albums,
     activeAlbumId,
+    toggleFavoriteAlbum,
+    toggleFavoriteImage,
     updateAlbum,
     openLightbox,
     openExportModal,
@@ -297,10 +908,59 @@ export const AlbumDetailView: React.FC = () => {
     setActiveVideoFolder,
     albumColorFilter,
     setAlbumColorFilter
-  } = useAppStore();
+  } = useAppStore(
+    useShallow(state => ({
+      albums: state.albums,
+      activeAlbumId: state.activeAlbumId,
+      toggleFavoriteAlbum: state.toggleFavoriteAlbum,
+      toggleFavoriteImage: state.toggleFavoriteImage,
+      updateAlbum: state.updateAlbum,
+      openLightbox: state.openLightbox,
+      openExportModal: state.openExportModal,
+      setSlideshowOpen: state.setSlideshowOpen,
+      setContactSheetOpen: state.setContactSheetOpen,
+      albumDetailZoomCols: state.albumDetailZoomCols,
+      setAlbumDetailZoomCols: state.setAlbumDetailZoomCols,
+      selectedImageIds: state.selectedImageIds,
+      toggleSelectImage: state.toggleSelectImage,
+      selectAllImages: state.selectAllImages,
+      clearSelectedImages: state.clearSelectedImages,
+      removeImagesFromAlbum: state.removeImagesFromAlbum,
+      deleteAlbum: state.deleteAlbum,
+      setAlbumCover: state.setAlbumCover,
+      refreshAlbumStreams: state.refreshAlbumStreams,
+      navigateToView: state.navigateToView,
+      settings: state.settings,
+      saveExtractedVideoToGallery: state.saveExtractedVideoToGallery,
+      setActivePlayingVideo: state.setActivePlayingVideo,
+      videos: state.videos,
+      videoFolders: state.videoFolders,
+      jobs: state.jobs,
+      addNotification: state.addNotification,
+      renameAlbumImage: state.renameAlbumImage,
+      checkItemSavedStatus: state.checkItemSavedStatus,
+      setActiveAlbumFolder: state.setActiveAlbumFolder,
+      setActiveVideoFolder: state.setActiveVideoFolder,
+      albumColorFilter: state.albumColorFilter,
+      setAlbumColorFilter: state.setAlbumColorFilter,
+    }))
+  );
 
-  const t = translations[settings.language].albumDetail;
+  const t: any = (translations[settings.language]?.albumDetail || translations['pt-BR']?.albumDetail || {});
+  const isEn = settings.language === 'en-US';
   const album = albums.find(a => a.id === activeAlbumId) || albums[0];
+
+  useEffect(() => {
+    if (album && album.id && (!album.images || album.images.length === 0)) {
+      backendApi.fetchAlbumDetails(album.id).then(fresh => {
+        if (fresh && fresh.images && fresh.images.length > 0) {
+          useAppStore.setState(state => ({
+            albums: state.albums.map(a => a.id === album.id ? fresh : a)
+          }));
+        }
+      }).catch(() => {});
+    }
+  }, [album?.id]);
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState(album?.title || '');
@@ -312,9 +972,21 @@ export const AlbumDetailView: React.FC = () => {
   const [isConfirmingDeleteAlbum, setIsConfirmingDeleteAlbum] = useState(false);
   const [isRefreshingStreams, setIsRefreshingStreams] = useState(false);
   const [isSyncingMetadata, setIsSyncingMetadata] = useState(false);
-  const [loadedDimensions, setLoadedDimensions] = useState<Record<string, { w: number; h: number }>>({});
+  const [syncBanner, setSyncBanner] = useState<{
+    type: 'success' | 'warning' | 'error';
+    title: string;
+    message: string;
+    details?: string[];
+  } | null>(null);
   const [cardViewMode, setCardViewMode] = useState<'adaptive' | 'contain' | 'masonry' | 'standard'>('adaptive');
   const [mediaFilter, setMediaFilter] = useState<'all' | 'photos' | 'gifs' | 'videos'>('all');
+
+  // Pré-aquecimento preemptivo em background das miniaturas ao abrir o álbum
+  useEffect(() => {
+    if (album?.id) {
+      fetch(`/api/albums/${album.id}/prewarm`, { method: 'POST' }).catch(() => {});
+    }
+  }, [album?.id]);
   const [folderModalState, setFolderModalState] = useState<{
     isOpen: boolean;
     mode: 'single' | 'batch';
@@ -337,15 +1009,15 @@ export const AlbumDetailView: React.FC = () => {
     try {
       await renameAlbumImage(album.id, imageToRename.id, newImageTitle.trim());
       addNotification({
-        title: t.titleUpdated || 'Título Atualizado',
-        message: (t.itemRenamed || '{type} renomeado para "{title}".').replace('{type}', imageToRename.isVideo ? (t.extractedVideo || 'Vídeo') : 'Item').replace('{title}', newImageTitle.trim()),
+        title: t.titleUpdated || (isEn ? 'Title Updated' : 'Título Atualizado'),
+        message: (t.itemRenamed || (isEn ? '{type} renamed to "{title}".' : '{type} renomeado para "{title}".')).replace('{type}', imageToRename.isVideo ? (t.extractedVideo || (isEn ? 'Video' : 'Vídeo')) : (isEn ? 'Item' : 'Item')).replace('{title}', newImageTitle.trim()),
         type: 'success'
       });
       setImageToRename(null);
     } catch {
       addNotification({
         title: 'Erro',
-        message: t.failSaveTitle || 'Não foi possível salvar o novo título.',
+        message: t.failSaveTitle || (isEn ? 'Could not save new title.' : 'Não foi possível salvar o novo título.'),
         type: 'error'
       });
     } finally {
@@ -353,54 +1025,6 @@ export const AlbumDetailView: React.FC = () => {
     }
   };
 
-  // 1. When opening an album, pre-read the original image dimensions and genuine file sizes if missing
-  useEffect(() => {
-    if (!album) return;
-
-    // Check if album has missing dimensions or missing file sizes
-    const needsProbe = (album.images || []).some(
-      img => img.mediaType !== 'video' && ((!img.width || img.width === 0) || (!img.fileSizeBytes || img.fileSizeBytes === 0))
-    );
-
-    if (needsProbe) {
-      backendApi.fetchAlbumDetails(album.id).then(fresh => {
-        if (fresh) {
-          useAppStore.setState(state => ({
-            albums: state.albums.map(a => a.id === album.id ? fresh : a)
-          }));
-        }
-      }).catch(() => {});
-    }
-  }, [album?.id]);
-
-  const [, setPaletteRenderTick] = useState(0);
-
-  // Dynamic computer vision: extract dominant colors for album photos that don't have palettes yet
-  useEffect(() => {
-    if (!album || !album.images || album.images.length === 0) return;
-    const unextracted = album.images.filter(img =>
-      (!img.colorPalette || img.colorPalette.length === 0) &&
-      (img.thumbnailUrl || img.previewUrl || img.originalUrl) &&
-      !colorPaletteCache.has(img.thumbnailUrl || img.previewUrl || img.originalUrl)
-    ).slice(0, 30);
-
-    if (unextracted.length === 0) return;
-
-    let cancelled = false;
-    unextracted.forEach(img => {
-      const url = img.thumbnailUrl || img.previewUrl || img.originalUrl;
-      if (url) {
-        extractDominantColors(url).then(colors => {
-          if (!cancelled && colors && colors.length > 0) {
-            img.colorPalette = colors;
-            setPaletteRenderTick(t => t + 1);
-          }
-        });
-      }
-    });
-
-    return () => { cancelled = true; };
-  }, [album?.id, album?.images?.length]);
 
   const toggleInlinePlay = (id: string) => {
     setPlayingVideoIds(prev =>
@@ -415,7 +1039,7 @@ export const AlbumDetailView: React.FC = () => {
   if (!album) {
     return (
       <div className="p-12 text-center text-slate-500 text-xs">
-        {t.noAlbumSelected || 'Nenhum álbum selecionado.'}
+        {t.noAlbumSelected || (isEn ? 'No album selected.' : 'Nenhum álbum selecionado.')}
       </div>
     );
   }
@@ -432,36 +1056,35 @@ export const AlbumDetailView: React.FC = () => {
     selectAllImages(topIds);
   };
 
-  const handleDownloadSelected = () => {
+  const handleDownloadSelected = async () => {
     const selectedImages = (album.images || []).filter(img => selectedImageIds.includes(img.id));
-    selectedImages.forEach((img, idx) => {
-      setTimeout(() => {
-        const link = document.createElement('a');
-        const isVid = img.mediaType === 'video' || !!img.videoUrl || (img.originalUrl && img.originalUrl.includes('.mp4'));
-        const ext = isVid ? 'mp4' : (img.isAnimated ? 'gif' : 'jpg');
-        const fname = `${img.title || (isVid ? `video-${idx + 1}` : `foto-${idx + 1}`)}.${ext}`;
-        let rawVid = img.rawOriginalUrl || img.originalUrl || img.videoUrl || '';
-        if (rawVid.includes('/api/proxy-video-stream') && rawVid.includes('url=')) {
-          const m = rawVid.match(/[?&]url=([^&]+)/);
-          if (m) rawVid = decodeURIComponent(m[1]);
-        }
-        let defaultRef = '';
-        try {
-          defaultRef = new URL(album.sourceUrl || rawVid).origin;
-        } catch {
-          defaultRef = '';
-        }
-        const vRef = album.sourceUrl || (img as any).sourcePage || defaultRef;
-        const dlUrl = isVid
-          ? `/api/proxy-video-stream?url=${encodeURIComponent(rawVid)}&referer=${encodeURIComponent(vRef)}&download=true&filename=${encodeURIComponent(fname)}`
-          : `/api/download-image?url=${encodeURIComponent(img.rawOriginalUrl || img.originalUrl || img.previewUrl || '')}&referer=${encodeURIComponent(album.sourceUrl || '')}&filename=${encodeURIComponent(fname)}`;
-        link.href = dlUrl;
-        link.download = fname;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }, idx * 250);
+    if (selectedImages.length === 0) return;
+
+    addNotification({
+      type: 'info',
+      title: 'Iniciando Downloads',
+      message: `Salvando ${selectedImages.length} item(ns) na pasta Downloads...`
     });
+
+    let successCount = 0;
+    for (let idx = 0; idx < selectedImages.length; idx++) {
+      const img = selectedImages[idx];
+      const isVid = img.mediaType === 'video' || !!img.videoUrl || (img.originalUrl && img.originalUrl.includes('.mp4'));
+      const ext = isVid ? 'mp4' : (img.isAnimated ? 'gif' : 'jpg');
+      const fname = `${img.title || (isVid ? `video-${idx + 1}` : `foto-${idx + 1}`)}.${ext}`;
+      const targetUrl = isVid ? (img.rawOriginalUrl || img.videoUrl || img.originalUrl) : (img.rawOriginalUrl || img.originalUrl || img.previewUrl || img.thumbnailUrl);
+
+      const res = await backendApi.downloadToDisk(targetUrl || '', fname, idx === selectedImages.length - 1);
+      if (res.success) successCount++;
+    }
+
+    if (successCount > 0) {
+      addNotification({
+        type: 'success',
+        title: isEn ? 'Downloads Completed' : 'Downloads Concluídos',
+        message: `${successCount} arquivo(s) salvos com sucesso na pasta Downloads!`
+      });
+    }
   };
 
   const selectedVideos = (album?.images || []).filter(
@@ -474,15 +1097,15 @@ export const AlbumDetailView: React.FC = () => {
     try {
       const itemsToSave = selectedVideos.map(v => ({
         url: v.rawOriginalUrl || v.videoUrl || v.originalUrl,
-        title: v.title || (t.extractedVideo || 'Vídeo Extraído'),
+        title: v.title || (t.extractedVideo || (isEn ? 'Extracted Video' : 'Vídeo Extraído')),
         thumbnailUrl: v.posterUrl || v.thumbnailUrl || '',
         duration: (v as any).duration || '',
         candidateId: v.candidateId
       }));
       await backendApi.batchSaveVideos(itemsToSave, targetFolder, 2);
       addNotification({
-        title: t.saveVideosStarted || 'Salvamento de Vídeos Iniciado',
-        message: `${itemsToSave.length} vídeo(s) estão sendo baixados em segundo plano para "${targetFolder}". Acompanhe na Gestão de Tarefas.`,
+        title: t.saveVideosStarted || (isEn ? 'Video Save Started' : 'Salvamento de Vídeos Iniciado'),
+        message: isEn ? `${itemsToSave.length} video(s) downloading in background to "${targetFolder}". Follow in Tasks.` : `${itemsToSave.length} vídeo(s) estão sendo baixados em segundo plano para "${targetFolder}". Acompanhe na Gestão de Tarefas.`,
         type: 'info'
       });
       triggerJobsPollingLoop();
@@ -501,7 +1124,7 @@ export const AlbumDetailView: React.FC = () => {
         mode: 'batch'
       });
     } else {
-      executeBatchSaveVideos(settings.defaultVideoFolder || 'Extraídos');
+      executeBatchSaveVideos(settings.defaultVideoFolder || (isEn ? 'Extracted' : 'Extraídos'));
     }
   };
 
@@ -526,7 +1149,7 @@ export const AlbumDetailView: React.FC = () => {
 
     if (savedStatus.isSaved && !savedStatus.hasAlternativeResolution) {
       const proceed = window.confirm(
-        (t.videoAlreadySavedConfirm || 'Este vídeo já está salvo na pasta "{folder}". Deseja salvar outra cópia mesmo assim?').replace('{folder}', savedStatus.folder || '')
+        (t.videoAlreadySavedConfirm || (isEn ? 'This video is already saved in folder "{folder}". Save another copy?' : 'Este vídeo já está salvo na pasta "{folder}". Deseja salvar outra cópia mesmo assim?')).replace('{folder}', savedStatus.folder || '')
       );
       if (!proceed) return;
     }
@@ -538,12 +1161,12 @@ export const AlbumDetailView: React.FC = () => {
         targetVideo: img
       });
     } else {
-      executeSaveSingleVideo(img, settings.defaultVideoFolder || 'Extraídos');
+      executeSaveSingleVideo(img, settings.defaultVideoFolder || (isEn ? 'Extracted' : 'Extraídos'));
     }
   };
 
   const handleDeleteSelected = () => {
-    if (window.confirm((t.removeImagesConfirm || 'Deseja remover {count} foto(s) do álbum?').replace('{count}', String(selectedImageIds.length)))) {
+    if (window.confirm((t.removeImagesConfirm || (isEn ? 'Do you want to remove {count} photo(s) from album?' : 'Deseja remover {count} foto(s) do álbum?')).replace('{count}', String(selectedImageIds.length)))) {
       removeImagesFromAlbum(album.id, selectedImageIds);
       clearSelectedImages();
     }
@@ -585,13 +1208,13 @@ export const AlbumDetailView: React.FC = () => {
         }
         addNotification({
           title: t.streamRenewed || 'Stream Renovado',
-          message: t.streamRenewedMsg || 'O link do vídeo foi renovado com sucesso.',
+          message: t.streamRenewedMsg || (isEn ? 'Video link renewed successfully.' : 'O link do vídeo foi renovado com sucesso.'),
           type: 'success'
         });
       } else {
         addNotification({
-          title: t.streamRenewFailed || 'Falha na Renovação',
-          message: t.streamRenewFailedMsg || 'Não foi possível renovar o link de stream no momento.',
+          title: t.streamRenewFailed || (isEn ? 'Renewal Failed' : 'Falha na Renovação'),
+          message: t.streamRenewFailedMsg || (isEn ? 'Could not renew stream link at this time.' : 'Não foi possível renovar o link de stream no momento.'),
           type: 'error'
         });
       }
@@ -605,15 +1228,51 @@ export const AlbumDetailView: React.FC = () => {
   const handleSyncMetadata = async () => {
     if (!album || isSyncingMetadata) return;
     setIsSyncingMetadata(true);
+    setSyncBanner(null);
     try {
       const fresh = await backendApi.syncAlbumMetadata(album.id);
       if (fresh) {
         useAppStore.setState(state => ({
           albums: state.albums.map(a => a.id === album.id ? fresh : a)
         }));
+        const count = fresh.images?.length || 0;
+        const failedCount = fresh.syncStats?.failed_count || 0;
+        const msg = fresh.syncMessage || `✓ ${count} fotos verificadas com sucesso!`;
+        setSyncBanner({
+          type: failedCount > 0 ? 'warning' : 'success',
+          title: isEn ? (failedCount > 0 ? 'Sync Completed with Warnings' : 'Sync Completed') : (failedCount > 0 ? 'Sincronização Concluída com Avisos' : 'Sincronização Concluída'),
+          message: msg,
+          details: fresh.syncStats?.failed_details
+        });
+        addNotification({
+          type: failedCount > 0 ? 'warning' : 'success',
+          title: isEn ? (failedCount > 0 ? 'Sync with Warnings' : 'Metadata Synced') : (failedCount > 0 ? 'Sincronização com Avisos' : (t.metadataSynced || 'Metadados Sincronizados')),
+          message: msg
+        });
+      } else {
+        setSyncBanner({
+          type: 'error',
+          title: isEn ? 'Sync Failed' : 'Falha na Sincronização',
+          message: isEn ? 'Could not retrieve metadata from origin server.' : 'Não foi possível consultar os metadados no servidor de origem.'
+        });
+        addNotification({
+          type: 'error',
+          title: isEn ? 'Sync' : 'Sincronização',
+          message: isEn ? 'Could not update server metadata.' : 'Não foi possível atualizar os metadados do servidor.'
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to sync metadata:', err);
+      setSyncBanner({
+        type: 'error',
+        title: isEn ? 'Sync Error' : 'Erro na Sincronização',
+        message: err?.message || 'Erro ao conectar com o servidor para sincronizar metadados.'
+      });
+      addNotification({
+        type: 'error',
+        title: isEn ? 'Sync Error' : 'Erro na Sincronização',
+        message: 'Erro ao conectar com o servidor para sincronizar metadados.'
+      });
     } finally {
       setIsSyncingMetadata(false);
     }
@@ -621,20 +1280,21 @@ export const AlbumDetailView: React.FC = () => {
 
   return (
     <div className="p-3 sm:p-6 max-w-7xl mx-auto space-y-4 sm:space-y-6 min-w-0 max-w-full">
-      {/* Hero Header Card */}
-      <div className="p-4 sm:p-6 rounded-3xl glass-panel-elevated border border-border flex flex-col lg:flex-row gap-4 sm:gap-6 items-start lg:items-center justify-between min-w-0 max-w-full overflow-hidden">
-        <div className="space-y-2 flex-1 min-w-0 max-w-full overflow-hidden">
-          {/* Breadcrumb Navigation with Folder Redirect & Videos Button */}
-          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-400">
+      {/* Hero Header Card - Responsive Multi-Tier Layout */}
+      <div className="p-4 sm:p-6 rounded-3xl glass-panel-elevated border border-border space-y-4 min-w-0 max-w-full overflow-hidden">
+        {/* Tier 1: Breadcrumbs Navigation + Quick Utility Actions */}
+        <div className="flex flex-wrap items-center justify-between gap-3 min-w-0">
+          {/* Breadcrumbs Navigation with Folder Redirect & Videos Button */}
+          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-400 min-w-0">
             <button
               onClick={() => {
                 setActiveAlbumFolder(null);
                 navigateToView('gallery');
               }}
               className="hover:text-brand-300 transition-colors flex items-center gap-1 cursor-pointer"
-              title={t.backToGalleryTitle || 'Voltar para a Galeria de Álbuns'}
+              title={t.backToGalleryTitle || (isEn ? 'Back to Album Library' : 'Voltar para a Galeria de Álbuns')}
             >
-              <span>{t.backToGallery || 'Galeria de Álbuns'}</span>
+              <span>{t.backToGallery || (isEn ? 'Album Library' : 'Galeria de Álbuns')}</span>
             </button>
             <span className="text-slate-600">/</span>
             <button
@@ -643,7 +1303,7 @@ export const AlbumDetailView: React.FC = () => {
                 navigateToView('gallery');
               }}
               className="px-2.5 py-0.5 rounded-lg bg-surface-elevated hover:bg-violet-950/60 border border-violet-500/40 text-violet-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
-              title={`Ver todos os álbuns da pasta "${album.folder || 'Geral'}"`}
+              title={isEn ? `View all albums in folder "${album.folder || 'General'}"` : `Ver todos os álbuns da pasta "${album.folder || 'Geral'}"`}
             >
               <Folder size={12} className="text-violet-400" />
               <span>{(t.folderPrefix || 'Pasta: ') + (album.folder || 'Geral')}</span>
@@ -652,7 +1312,7 @@ export const AlbumDetailView: React.FC = () => {
             {/* Direct Link to open this folder in Videos Gallery only if videos actually exist */}
             {(() => {
               if (!album?.folder) return null;
-              const normKey = (s: string) => (s || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+              const normKey = (s: string) => (s || '').normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
               const targetKey = normKey(album.folder);
               const matchedFolder = (videoFolders || []).find(vf => normKey(vf.name) === targetKey);
               const count = matchedFolder ? matchedFolder.videoCount : (videos || []).filter(v => normKey(v.folder || 'Geral') === targetKey).length;
@@ -665,51 +1325,74 @@ export const AlbumDetailView: React.FC = () => {
                     navigateToView('videos');
                   }}
                   className="px-2.5 py-0.5 rounded-lg bg-violet-600/20 hover:bg-violet-600/40 border border-violet-500/40 text-violet-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer ml-1"
-                  title={`Abrir os ${count} vídeos da pasta "${matchedFolder?.name || album.folder}" na Galeria de Vídeos`}
+                  title={isEn ? `Open ${count} videos of folder "${matchedFolder?.name || album.folder}" in Video Gallery` : `Abrir os ${count} vídeos da pasta "${matchedFolder?.name || album.folder}" na Galeria de Vídeos`}
                 >
                   <Film size={12} className="text-violet-400" />
-                  <span>{(t.viewVideosInFolder || 'Ver Vídeos ({count})').replace('{count}', String(count))}</span>
+                  <span>{(t.viewVideosInFolder || (isEn ? 'View Videos ({count})' : 'Ver Vídeos ({count})')).replace('{count}', String(count))}</span>
                 </button>
               );
             })()}
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            <span className="text-[9px] sm:text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
-              {t.allOriginalsResolved || '100% ORIGINAIS RESOLVIDOS'}
-            </span>
-            <span className="text-[9px] sm:text-[10px] font-mono px-2 py-0.5 rounded bg-surface-elevated text-slate-400 border border-border shrink-0">
-              {(album.images || []).length} {t.photosLabel || 'Fotos'}
-            </span>
-            {album.totalSizeBytes > 0 && (
-              <span className="text-[9px] sm:text-[10px] font-mono px-2 py-0.5 rounded bg-surface-elevated text-cyan-400 border border-border shrink-0">
-                {formatFileSize(album.totalSizeBytes)}
-              </span>
-            )}
-            <span className="text-[9px] sm:text-[10px] font-mono px-2 py-0.5 rounded bg-brand-500/20 text-brand-300 border border-brand-500/30 shrink-0">
-              {album.aiModel}
-            </span>
-          </div>
+          {/* Quick Utility Actions: Favoritar Álbum, Sincronizar Metadados & Excluir Álbum */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Botão Favoritar Álbum */}
+            <button
+              type="button"
+              onClick={() => toggleFavoriteAlbum(album.id)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer shadow-sm ${
+                album.isFavorite
+                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 shadow-glow-brand'
+                  : 'bg-surface-elevated hover:bg-surface-hover border-border text-slate-300 hover:text-rose-400'
+              }`}
+              title={album.isFavorite ? (t.removeFavorite || (isEn ? 'Remove from Favorites' : 'Remover dos Favoritos')) : (t.addFavorite || (isEn ? 'Favorite this Album' : 'Favoritar este Álbum'))}
+            >
+              <Heart size={13} className={album.isFavorite ? 'fill-rose-400 text-rose-400' : 'text-slate-400'} />
+              <span>{album.isFavorite ? (isEn ? 'Favorite' : 'Favorito') : (t.addFavorite || (isEn ? 'Favorite Album' : 'Favoritar Álbum'))}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleSyncMetadata}
+              disabled={isSyncingMetadata}
+              className="px-3 py-1.5 rounded-xl border border-cyan-500/40 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-all whitespace-nowrap disabled:opacity-50 cursor-pointer shadow-sm"
+              title={isEn ? "Sync real file sizes and metadata" : "Sincronizar tamanhos e metadados reais dos arquivos"}
+            >
+              <Sparkles size={13} className={isSyncingMetadata ? 'animate-spin text-cyan-400' : 'text-cyan-400'} />
+              <span>{isSyncingMetadata ? (isEn ? 'Syncing...' : 'Sincronizando...') : (isEn ? 'Sync Metadata' : 'Sincronizar Metadados')}</span>
+            </button>
 
-          {/* Editable Title with Strict Width Containment */}
+            <button
+              onClick={() => setIsConfirmingDeleteAlbum(true)}
+              className="px-3 py-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-sm"
+              title={t.deleteAlbum || (isEn ? 'Delete this Album' : 'Excluir este Álbum')}
+            >
+              <Trash2 size={13} />
+              <span className="hidden sm:inline">{t.deleteAlbum || (isEn ? 'Delete Album' : 'Excluir Álbum')}</span>
+              <span className="sm:hidden">Excluir</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Tier 2: Full-Width Title and Source Link (Never squished) */}
+        <div className="space-y-1.5 min-w-0 max-w-full">
           {isEditingTitle ? (
             <div className="flex items-center gap-2 min-w-0 max-w-full">
               <input
                 type="text"
                 value={editedTitle}
                 onChange={e => setEditedTitle(e.target.value)}
-                className="text-base sm:text-xl font-extrabold bg-surface-elevated px-3 py-1 rounded-xl border border-brand-500 text-slate-100 outline-none w-full min-w-0"
+                className="text-base sm:text-xl font-extrabold bg-surface-elevated px-3 py-1.5 rounded-xl border border-brand-500 text-slate-100 outline-none w-full min-w-0"
               />
               <button
                 onClick={handleSaveTitle}
-                className="px-3 py-1 rounded-xl bg-brand-600 text-white text-xs font-bold shrink-0"
+                className="px-3.5 py-1.5 rounded-xl bg-brand-600 text-white text-xs font-bold shrink-0 cursor-pointer"
               >
                 Salvar
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 min-w-0 max-w-full overflow-hidden">
-              <h1 className="text-base sm:text-2xl font-extrabold text-slate-100 tracking-tight truncate min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0 max-w-full">
+              <h1 className="text-lg sm:text-2xl font-extrabold text-slate-100 tracking-tight break-words line-clamp-2 min-w-0 flex-1 leading-snug" title={album.title}>
                 {album.title}
               </h1>
               <button
@@ -717,10 +1400,10 @@ export const AlbumDetailView: React.FC = () => {
                   setEditedTitle(album.title);
                   setIsEditingTitle(true);
                 }}
-                className="p-1 text-slate-400 hover:text-slate-200 shrink-0"
-                title={t.editTitle || 'Editar Título'}
+                className="p-1.5 text-slate-400 hover:text-slate-200 shrink-0 rounded-lg hover:bg-surface-elevated transition-colors cursor-pointer"
+                title={t.editTitle || (isEn ? 'Edit Title' : 'Editar Título')}
               >
-                <Edit2 size={14} />
+                <Edit2 size={15} />
               </button>
             </div>
           )}
@@ -738,63 +1421,105 @@ export const AlbumDetailView: React.FC = () => {
           </p>
         </div>
 
-        {/* Hero Toolbar Actions */}
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar w-full sm:w-auto">
-          <button
-            onClick={() => setSlideshowOpen(true)}
-            className="px-3 py-2 rounded-xl bg-surface-elevated hover:bg-surface-hover border border-border text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
-          >
-            <Play size={13} />
-            <span>{t.slideshow}</span>
-          </button>
+        {/* Tier 3: Metadata Badges on Left, Primary Actions on Right */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-border/60 min-w-0">
+          {/* Metadata Badges with wrap protection */}
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
+              {t.allOriginalsResolved || '100% ORIGINAIS RESOLVIDOS'}
+            </span>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-surface-elevated text-slate-400 border border-border shrink-0">
+              {(album.images || []).length} {t.photosLabel || 'Fotos'}
+            </span>
+            {album.totalSizeBytes > 0 && (
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-surface-elevated text-cyan-400 border border-border shrink-0">
+                {formatFileSize(album.totalSizeBytes)}
+              </span>
+            )}
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-brand-500/20 text-brand-300 border border-brand-500/30 shrink-0">
+              {album.aiModel}
+            </span>
+          </div>
 
-          <button
-            onClick={() => setContactSheetOpen(true)}
-            className="px-3 py-2 rounded-xl bg-surface-elevated hover:bg-surface-hover border border-border text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
-          >
-            <LayoutGrid size={13} />
-            <span>{t.contactSheet}</span>
-          </button>
-
-          <button
-            onClick={() => openExportModal(album)}
-            className="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-glow-brand transition-colors whitespace-nowrap"
-          >
-            <Download size={14} />
-            <span>{t.downloadZip}</span>
-          </button>
-
-          <button
-            onClick={() => setIsConfirmingDeleteAlbum(true)}
-            className="px-3 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
-            title="Excluir este Álbum"
-          >
-            <Trash2 size={13} />
-            <span className="hidden sm:inline">Excluir Álbum</span>
-          </button>
-
-          {hasVideos && (
+          {/* Primary Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
-              onClick={handleRefreshStreams}
-              disabled={isRefreshingStreams}
-              className="px-3 py-2 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/40 text-violet-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap disabled:opacity-50"
-              title="Renovar links de stream dos vídeos"
+              onClick={() => setSlideshowOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-surface-elevated hover:bg-surface-hover border border-border text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-sm"
             >
-              <RefreshCw size={13} className={isRefreshingStreams ? 'animate-spin' : ''} />
-              <span className="hidden sm:inline">{isRefreshingStreams ? 'Renovando...' : 'Renovar Streams'}</span>
+              <Play size={13} />
+              <span>{t.slideshow}</span>
             </button>
-          )}
 
-          <button
-            onClick={handleSyncMetadata}
-            disabled={isSyncingMetadata}
-            className="px-3 py-2 rounded-xl bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap disabled:opacity-50"
-            title="Sincronizar tamanhos e metadados reais dos arquivos"
-          >
-            <Sparkles size={13} className={isSyncingMetadata ? 'animate-spin' : ''} />
-            <span className="hidden sm:inline">{isSyncingMetadata ? 'Sincronizando...' : 'Sincronizar Metadados'}</span>
-            <span className="sm:hidden">{isSyncingMetadata ? 'Sincronizando...' : 'Sincronizar'}</span>
-          </button>
+            <button
+              onClick={() => setContactSheetOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-surface-elevated hover:bg-surface-hover border border-border text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer shadow-sm"
+            >
+              <LayoutGrid size={13} />
+              <span>{t.contactSheet}</span>
+            </button>
+
+            <button
+              onClick={() => openExportModal(album)}
+              className="px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-glow-brand transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <Download size={14} />
+              <span>{t.downloadZip}</span>
+            </button>
+
+            {hasVideos && (
+              <button
+                onClick={handleRefreshStreams}
+                disabled={isRefreshingStreams}
+                className="px-3 py-1.5 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/40 text-violet-300 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap disabled:opacity-50 cursor-pointer shadow-sm"
+                title={isEn ? 'Renew video stream links' : 'Renovar links de stream dos vídeos'}
+              >
+                <RefreshCw size={13} className={isRefreshingStreams ? 'animate-spin' : ''} />
+                <span className="hidden sm:inline">{isRefreshingStreams ? 'Renovando...' : 'Renovar Streams'}</span>
+                <span className="sm:hidden">Renovar</span>
+              </button>
+            )}
+          </div>
+        
+        {/* Dedicated Sync Feedback Banner HUD */}
+        {syncBanner && (
+          <div className={`mt-3 p-3.5 sm:p-4 rounded-2xl border transition-all flex items-start justify-between gap-3 shadow-lg ${
+            syncBanner.type === 'success'
+              ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200'
+              : syncBanner.type === 'warning'
+              ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
+              : 'bg-rose-950/40 border-rose-500/50 text-rose-200'
+          }`}>
+            <div className="flex items-start gap-3 min-w-0">
+              {syncBanner.type === 'success' ? (
+                <CheckCircle2 size={18} className="text-emerald-400 shrink-0 mt-0.5" />
+              ) : syncBanner.type === 'warning' ? (
+                <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle size={18} className="text-rose-400 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1 min-w-0">
+                <div className="font-bold text-xs sm:text-sm">{syncBanner.title}</div>
+                <p className="text-xs opacity-90 break-words leading-relaxed">{syncBanner.message}</p>
+                {syncBanner.details && syncBanner.details.length > 0 && (
+                  <ul className="text-[11px] opacity-80 list-disc list-inside space-y-0.5 pt-1">
+                    {syncBanner.details.map((d, i) => (
+                      <li key={i}>{d}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSyncBanner(null)}
+              className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-slate-100 transition-colors shrink-0 cursor-pointer"
+              title={isEn ? 'Close sync notice' : 'Fechar aviso de sincronização'}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
         </div>
       </div>
 
@@ -857,7 +1582,7 @@ export const AlbumDetailView: React.FC = () => {
                   }`}
                 >
                   <Film size={13} />
-                  <span>{(t.videosCount || 'Vídeos ({count})').replace('{count}', String(videosCount))}</span>
+                  <span>{(t.videosCount || (isEn ? 'Videos ({count})' : 'Vídeos ({count})')).replace('{count}', String(videosCount))}</span>
                 </button>
               )}
             </div>
@@ -890,7 +1615,7 @@ export const AlbumDetailView: React.FC = () => {
                     ? 'bg-brand-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title={t.viewAdaptiveTitle || "Adaptativo Inteligente: GIFs e vídeos em 16:9 sem cortes horizontais; fotos em 4:5"}
+                title={t.viewAdaptiveTitle || (isEn ? 'Smart Adaptive: GIFs and videos in 16:9 without horizontal crops; photos in 4:5' : 'Adaptativo Inteligente: GIFs e vídeos em 16:9 sem cortes horizontais; fotos em 4:5')}
               >
                 <span>{t.viewAdaptive || 'Adaptativo'}</span>
               </button>
@@ -902,9 +1627,9 @@ export const AlbumDetailView: React.FC = () => {
                     ? 'bg-brand-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title={t.viewPanoramicTitle || "Panorâmico Sem Cortes: Todos os cards em 16:9 com enquadramento completo (contain)"}
+                title={t.viewPanoramicTitle || (isEn ? 'Panoramic Uncut: All cards in 16:9 full fit' : 'Panorâmico Sem Cortes: Todos os cards em 16:9 com enquadramento completo (contain)')}
               >
-                <span>{t.viewPanoramic || 'Panorâmico'}</span>
+                <span>{t.viewPanoramic || (isEn ? 'Panoramic' : 'Panorâmico')}</span>
               </button>
               <button
                 type="button"
@@ -914,7 +1639,7 @@ export const AlbumDetailView: React.FC = () => {
                     ? 'bg-brand-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Masonry: Proporção Real de cada arquivo sem cortar nada"
+                title={isEn ? 'Masonry: Real aspect ratio of each file without cropping' : 'Masonry: Proporção Real de cada arquivo sem cortar nada'}
               >
                 <span>{t.viewMasonry || 'Masonry'}</span>
               </button>
@@ -926,7 +1651,7 @@ export const AlbumDetailView: React.FC = () => {
                     ? 'bg-brand-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="Vertical 4:5: Formato vertical clássico"
+                title={isEn ? 'Vertical 4:5: Classic portrait ratio' : 'Vertical 4:5: Formato vertical clássico'}
               >
                 <span>4:5</span>
               </button>
@@ -969,31 +1694,31 @@ export const AlbumDetailView: React.FC = () => {
                   onClick={handleInitiateBatchSaveVideos}
                   disabled={isBatchSavingVideos}
                   className="px-2 py-1 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-medium text-xs flex items-center gap-1 shadow-sm transition-colors disabled:opacity-50"
-                  title="Salvar vídeos selecionados na Galeria de Vídeos do App"
+                  title={isEn ? 'Save selected videos to App Video Gallery' : 'Salvar vídeos selecionados na Galeria de Vídeos do App'}
                 >
                   {isBatchSavingVideos ? (
                     <Loader2 size={11} className="animate-spin" />
                   ) : (
                     <Save size={11} />
                   )}
-                  <span>Salvar {selectedVideos.length} Vídeo{selectedVideos.length > 1 ? 's' : ''}</span>
+                  <span>{isEn ? `Save ${selectedVideos.length} Video${selectedVideos.length > 1 ? 's' : ''}` : `Salvar ${selectedVideos.length} Vídeo${selectedVideos.length > 1 ? 's' : ''}`}</span>
                 </button>
               )}
               <button
                 onClick={handleDownloadSelected}
                 className="px-2 py-1 rounded-lg bg-brand-600 hover:bg-brand-500 text-white font-medium text-xs flex items-center gap-1 shadow-sm transition-colors"
-                title="Baixar arquivos selecionados (.jpg ou .mp4)"
+                title={isEn ? "Download selected files (.jpg or .mp4)" : "Baixar arquivos selecionados (.jpg ou .mp4)"}
               >
                 <Download size={11} />
-                <span>Baixar</span>
+                <span>{isEn ? "Download" : "Baixar"}</span>
               </button>
               <button
                 onClick={handleDeleteSelected}
                 className="px-2 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-medium text-xs flex items-center gap-1 transition-colors"
-                title="Remover itens selecionados do álbum"
+                title={isEn ? 'Remove selected items from album' : 'Remover itens selecionados do álbum'}
               >
                 <Trash2 size={11} />
-                <span>Excluir</span>
+                <span>{isEn ? "Delete" : "Excluir"}</span>
               </button>
             </div>
           )}
@@ -1018,19 +1743,10 @@ export const AlbumDetailView: React.FC = () => {
 
       {/* Image Grid */}
       <div
-        className={`grid gap-3 sm:gap-4 ${
-          albumDetailZoomCols === 1
-            ? 'grid-cols-1'
-            : albumDetailZoomCols === 2
-            ? 'grid-cols-1 sm:grid-cols-2'
-            : albumDetailZoomCols === 3
-            ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-            : albumDetailZoomCols === 4
-            ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4'
-            : albumDetailZoomCols === 5
-            ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
-            : 'grid-cols-2 sm:grid-cols-4 lg:grid-cols-6'
-        }`}
+        className={cardViewMode === 'masonry'
+          ? `${getMasonryColsClass(albumDetailZoomCols)} gap-3 sm:gap-4 space-y-3 sm:space-y-4`
+          : `grid gap-3 sm:gap-4 ${getGridColsClass(albumDetailZoomCols)}`
+        }
       >
         {(() => {
           const albumImages = album.images || [];
@@ -1068,607 +1784,178 @@ export const AlbumDetailView: React.FC = () => {
             );
           }
 
-          return deduplicatedImages.map((img, idx) => {
-            const isSelected = selectedImageIds.includes(img.id);
-            const isVideo = img.mediaType === 'video' || !!img.videoUrl || !!(img as any).videoStreamUrl || !!(img as any).is_video || /\.(mp4|webm|m4v)(\?|$)/i.test(img.originalUrl || '');
-            const rawVideoLink = img.videoUrl || (img as any).videoStreamUrl || (isVideo ? img.originalUrl : undefined);
-            const videoLink = getProxiedStreamUrl(rawVideoLink, (img as any).sourcePage || album.sourceUrl);
-            const isGif = img.mediaType === 'gif' || img.isAnimated || img.format === 'gif' || img.format === 'webp' || /\.(gif|webp)(\?|$)/i.test(img.originalUrl || '');
-            const isInlinePlaying = isVideo && playingVideoIds.includes(img.id);
-
-            let containerAspectClass = 'aspect-[4/5]';
-            let imageFitClass = 'object-cover';
-
-            if (cardViewMode === 'adaptive') {
-              if (isVideo || isGif) {
-                containerAspectClass = 'aspect-video';
-                imageFitClass = 'object-contain bg-slate-950';
-              } else {
-                containerAspectClass = 'aspect-[4/5]';
-                imageFitClass = 'object-cover';
-              }
-            } else if (cardViewMode === 'contain') {
-              containerAspectClass = 'aspect-video';
-              imageFitClass = 'object-contain bg-slate-950';
-            } else if (cardViewMode === 'masonry') {
-              containerAspectClass = 'min-h-[160px] max-h-[420px]';
-              imageFitClass = 'object-contain bg-slate-950/80 w-full h-auto max-h-[420px]';
-            } else if (cardViewMode === 'standard') {
-              containerAspectClass = 'aspect-[4/5]';
-              imageFitClass = 'object-cover';
-            }
-
-            const handleCardClick = () => {
-              if (isVideo && videoLink) {
-                toggleInlinePlay(img.id);
-              } else {
-                openLightbox(img, album);
-              }
-            };
-
-            return (
-              <div
-                key={img.id}
-                onClick={handleCardClick}
-                className={`group relative glass-panel rounded-2xl border overflow-hidden cursor-pointer transition-all duration-300 hover:shadow-card-elevated flex flex-col justify-between ${
-                  isSelected
-                    ? 'border-brand-500 ring-2 ring-brand-500/50 shadow-glow-brand'
-                    : isVideo
-                    ? 'border-violet-500/30 hover:border-violet-500/60'
-                    : isGif
-                    ? 'border-amber-500/30 hover:border-amber-500/60'
-                    : 'border-border hover:border-brand-500/40'
-                }`}
-              >
-                {/* Image/Video Preview Surface */}
-                <div className={`relative ${containerAspectClass} overflow-hidden bg-slate-950 flex items-center justify-center`}>
-                {isVideo && videoLink ? (
-                  isInlinePlaying ? (
-                    <div
-                      className="w-full h-full relative bg-black flex items-center justify-center"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <InlineStreamPlayer
-                        key={`${img.id}-${img.videoUrl || img.originalUrl || ''}`}
-                        url={videoLink}
-                        poster={img.posterUrl || img.thumbnailUrl}
-                        referer={(img as any).sourcePage || album.sourceUrl}
-                        onRefresh={() => handleRefreshSingleVideo(img)}
-                        isRefreshing={refreshingStreamId === img.id}
-                      />
-
-                      {(img.candidateId || img.id) && (
-                        <button
-                          type="button"
-                          onClick={() => handleRefreshSingleVideo(img)}
-                          disabled={refreshingStreamId === img.id}
-                          className="absolute top-2 right-11 z-30 p-1.5 rounded-full bg-violet-600/90 text-white hover:bg-violet-500 border border-violet-400/40 transition-all shadow-lg disabled:opacity-50"
-                          title="Renovar Link deste Vídeo (Caso mostre mensagem de expirado)"
-                        >
-                          <RefreshCw size={14} className={refreshingStreamId === img.id ? 'animate-spin' : ''} />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          closeInlinePlay(img.id);
-                          let rawVidSrc = img.rawOriginalUrl || img.originalUrl || videoLink || '';
-                          let unwrapCount = 0;
-                          while (rawVidSrc.includes('/api/proxy-video-stream') && rawVidSrc.includes('url=') && unwrapCount < 5) {
-                            unwrapCount++;
-                            const m = rawVidSrc.match(/[?&]url=([^&]+)/);
-                            if (m) rawVidSrc = decodeURIComponent(m[1]);
-                            else break;
-                          }
-                          let defaultRef = '';
-                          try {
-                            defaultRef = new URL(album.sourceUrl || rawVidSrc).origin;
-                          } catch {
-                            defaultRef = '';
-                          }
-                          const vRef = (img as any).sourcePage || album.sourceUrl || defaultRef;
-                          setActivePlayingVideo({
-                            id: img.id,
-                            title: img.title || 'Vídeo',
-                            filename: `${img.title || 'video'}.mp4`,
-                            folder: album.title || 'Álbum',
-                            fileSizeBytes: img.fileSizeBytes || (img as any).file_size || 0,
-                            format: 'MP4',
-                            isFavorite: false,
-                            createdAt: new Date().toISOString(),
-                            relPath: '',
-                            streamUrl: videoLink,
-                            downloadUrl: `/api/proxy-video-stream?url=${encodeURIComponent(rawVidSrc)}&referer=${encodeURIComponent(vRef)}&download=true&filename=${encodeURIComponent(img.title || 'video')}`,
-                            thumbnailUrl: img.posterUrl || img.thumbnailUrl || '',
-                            sourceUrl: vRef,
-                            width: img.width,
-                            height: img.height,
-                            durationSeconds: img.durationSeconds || (img as any).duration_seconds
-                          });
-                        }}
-                        className="absolute top-2 right-20 z-30 p-1.5 rounded-full bg-black/80 text-white hover:bg-violet-600 border border-white/30 transition-all shadow-lg"
-                        title="Expandir Vídeo (Modo Cinema)"
-                      >
-                        <Maximize2 size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => closeInlinePlay(img.id)}
-                        className="absolute top-2 right-2 z-30 p-1.5 rounded-full bg-black/80 text-white hover:bg-white hover:text-black border border-white/30 transition-all shadow-lg"
-                        title="Fechar Reprodutor"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  ) : (
-                    // Show poster or thumbnail for video with play overlay
-                    <div className="w-full h-full relative">
-                      <img
-                        src={img.posterUrl || img.thumbnailUrl}
-                        alt={img.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        referrerPolicy="no-referrer"
-                      />
-                      {/* Play overlay */}
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 group-hover:bg-black/20 transition-colors">
-                        <div className="w-12 h-12 rounded-full bg-violet-600/90 text-white shadow-glow-brand flex items-center justify-center group-hover:scale-110 transition-transform">
-                          <Play size={22} className="translate-x-0.5" />
-                        </div>
-                      </div>
-                    </div>
-                  )
-                ) : (
-                  <img
-                    src={isGif ? (img.originalUrl || img.thumbnailUrl) : img.thumbnailUrl}
-                    alt={img.title}
-                    loading="lazy"
-                    decoding="async"
-                    className={`w-full h-full ${imageFitClass} group-hover:scale-105 transition-transform duration-500`}
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      const target = e.currentTarget;
-                      if (img.originalUrl && target.src !== img.originalUrl) {
-                        target.src = img.originalUrl;
-                      } else if (img.rawOriginalUrl && target.src !== img.rawOriginalUrl) {
-                        target.src = img.rawOriginalUrl;
-                      } else if (img.thumbnailUrl && target.src !== img.thumbnailUrl) {
-                        target.src = img.thumbnailUrl;
-                      }
-                    }}
-                  />
-                )}
-                {!isInlinePlaying && (
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-                )}
-
-                {/* Selection Checkbox */}
-                <div
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleSelectImage(img.id);
-                  }}
-                  className="absolute top-2.5 left-2.5 z-10"
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => {}}
-                    className="w-4 h-4 rounded text-brand-500 cursor-pointer"
-                  />
-                </div>
-
-                {/* Saved Redirect Badge for Videos */}
-                {isVideo && !isInlinePlaying && (() => {
-                  const sInfo = checkItemSavedStatus({
-                    url: img.rawOriginalUrl || img.videoUrl || img.originalUrl,
-                    title: img.title,
-                    mediaType: 'video'
-                  });
-                  if (!sInfo.isSaved) return null;
-                  return (
-                    <div className="absolute top-2.5 left-9 z-10">
-                      <SavedRedirectBadge savedInfo={sInfo} />
-                    </div>
-                  );
-                })()}
-
-                {/* Media Type / Resolution Badge */}
-                {!isInlinePlaying && (
-                  isVideo ? (() => {
-                    const vInfo = getVideoResolutionInfo(img);
-                    const is4k = vInfo.label.includes('4K');
-                    return (
-                      <span className={`absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full backdrop-blur-md border text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-md group-hover:opacity-0 transition-opacity ${vInfo.badgeClass}`}>
-                        <Film size={11} className={is4k ? 'text-amber-400' : 'text-violet-300'} />
-                        {vInfo.label}
-                      </span>
-                    );
-                  })() : isGif ? (
-                    <span className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-amber-950/90 backdrop-blur-md border border-amber-500/50 text-[10px] font-mono font-bold text-amber-300 flex items-center gap-1.5 group-hover:opacity-0 transition-opacity shadow-md">
-                      <Clapperboard size={11} className="text-amber-400" />
-                      <span>GIF{img.width && img.height ? ` • ${img.width}×${img.height}` : ''}{img.fileSizeBytes ? ` • ${formatFileSize(img.fileSizeBytes)}` : ''}</span>
-                    </span>
-                  ) : (() => {
-                    const dynamicDims = loadedDimensions[img.id];
-                    const w = img.width || dynamicDims?.w || 0;
-                    const h = img.height || dynamicDims?.h || 0;
-                    const resLabel = w >= 3840 ? 'UHD' : w >= 1920 ? 'FHD' : (w > 0 ? 'HD' : 'ORIGINAL HD');
-                    return (
-                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md border border-white/10 text-[9px] font-mono font-bold text-emerald-400 group-hover:opacity-0 transition-opacity">
-                        {w > 0 && h > 0 ? `${w}×${h} • ${resLabel}` : 'ORIGINAL HD'}
-                      </span>
-                    );
-                  })()
-                )}
-
-                {/* Hover Quick Actions */}
-                {!isInlinePlaying && (
-                  <div className="absolute top-2.5 right-2.5 flex items-center gap-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {/* Renovar Stream individual */}
-                    {isVideo && (img.candidateId || img.id) && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRefreshSingleVideo(img);
-                        }}
-                        disabled={refreshingStreamId === img.id}
-                        className="p-1.5 rounded-lg bg-cyan-900/90 hover:bg-cyan-800 text-cyan-200 hover:text-white border border-cyan-500/40 transition-colors shadow-sm disabled:opacity-50"
-                        title="Renovar link de stream (expirado)"
-                      >
-                        <RefreshCw size={13} className={refreshingStreamId === img.id ? 'animate-spin' : ''} />
-                      </button>
-                    )}
-                    {isVideo && img.videoUrl && (() => {
-                      const isSavingThisVideo = savingVideoId === img.id || jobs.some(j =>
-                        j.status === 'active' &&
-                        (j.mode === 'video_save' || (j.mode as string) === 'video_downloader') &&
-                        (j.url === (img.rawOriginalUrl || img.videoUrl) || (img.title && j.title.toLowerCase().includes(img.title.toLowerCase())))
-                      );
-                      const savedStatus = checkItemSavedStatus({
-                        url: img.rawOriginalUrl || img.videoUrl || img.originalUrl,
-                        title: img.title,
-                        mediaType: 'video'
-                      });
-
-                      return (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (isSavingThisVideo) return;
-                            handleInitiateSaveSingleVideo(img);
-                          }}
-                          disabled={isSavingThisVideo}
-                          className={`p-1.5 rounded-lg border transition-colors shadow-sm disabled:opacity-80 ${
-                            isSavingThisVideo
-                              ? 'bg-violet-900/90 text-violet-200 border-violet-500/60'
-                              : savedStatus.isSaved
-                              ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border-emerald-500/40'
-                              : 'bg-violet-900/90 hover:bg-violet-800 text-violet-200 hover:text-white border border-violet-500/40'
-                          }`}
-                          title={
-                            isSavingThisVideo
-                              ? 'Salvando em segundo plano... Acompanhe o progresso na Gestão de Tarefas'
-                              : savedStatus.isSaved
-                              ? `Vídeo salvo na pasta "${savedStatus.folder}" (clique para escolher pasta ou salvar cópia)`
-                              : 'Salvar na Galeria de Vídeos'
-                          }
-                        >
-                          {isSavingThisVideo ? (
-                            <Loader2 size={13} className="animate-spin text-violet-300" />
-                          ) : savedStatus.isSaved ? (
-                            <Check size={13} className="text-emerald-400" />
-                          ) : (
-                            <Save size={13} />
-                          )}
-                        </button>
-                      );
-                    })()}
-                    {/* Definir como Capa do Álbum */}
-                    {(() => {
-                      const imgTargetUrl = img.rawOriginalUrl || img.originalUrl || img.rawThumbnailUrl || img.thumbnailUrl;
-                      const isCurrentCover = !!(
-                        (album.rawCoverImage && (img.rawOriginalUrl === album.rawCoverImage || img.originalUrl === album.rawCoverImage || img.rawThumbnailUrl === album.rawCoverImage || img.thumbnailUrl === album.rawCoverImage)) ||
-                        (album.coverImage && (img.originalUrl === album.coverImage || img.thumbnailUrl === album.coverImage || img.rawOriginalUrl === album.coverImage))
-                      );
-
-                      return (
-                        <button
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            if (imgTargetUrl) {
-                              setCoverUpdatingId(img.id);
-                              await setAlbumCover(album.id, imgTargetUrl);
-                              setTimeout(() => setCoverUpdatingId(null), 1000);
-                            }
-                          }}
-                          disabled={coverUpdatingId === img.id}
-                          className={`p-1.5 rounded-lg border transition-all shadow-sm ${
-                            isCurrentCover
-                              ? 'bg-amber-500/90 hover:bg-amber-500 border-amber-400 text-white shadow-glow-brand'
-                              : 'bg-black/80 hover:bg-amber-600/80 text-slate-300 hover:text-white border-white/20'
-                          }`}
-                          title={isCurrentCover ? 'Esta foto é a capa atual da galeria' : 'Definir como miniatura/capa do álbum na galeria'}
-                        >
-                          {coverUpdatingId === img.id ? (
-                            <Loader2 size={13} className="animate-spin text-amber-300" />
-                          ) : (
-                            <BookmarkCheck size={13} className={isCurrentCover ? 'text-white' : 'text-amber-300'} />
-                          )}
-                        </button>
-                      );
-                    })()}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenRename(img);
-                      }}
-                      className="p-1.5 rounded-lg bg-black/80 hover:bg-brand-600 text-slate-200 hover:text-white border border-white/20 transition-colors shadow-sm"
-                      title={isVideo ? 'Renomear Vídeo' : isGif ? 'Renomear GIF' : 'Renomear Foto'}
-                    >
-                      <Edit2 size={13} />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const ext = isVideo ? 'mp4' : isGif ? 'gif' : 'jpg';
-                        const fname = `${img.title || 'media'}.${ext}`;
-                        let vRaw = img.rawOriginalUrl || img.originalUrl || '';
-                        let unwrapCount = 0;
-                        while (vRaw.includes('/api/proxy-video-stream') && vRaw.includes('url=') && unwrapCount < 5) {
-                          unwrapCount++;
-                          const m = vRaw.match(/[?&]url=([^&]+)/);
-                          if (m) vRaw = decodeURIComponent(m[1]);
-                          else break;
-                        }
-                        let defaultRef = '';
-                        try {
-                          defaultRef = new URL(album.sourceUrl || vRaw).origin;
-                        } catch {
-                          defaultRef = '';
-                        }
-                        const vRef = album.sourceUrl || (img as any).sourcePage || defaultRef;
-                        const dlUrl = isVideo
-                          ? `/api/proxy-video-stream?url=${encodeURIComponent(vRaw)}&referer=${encodeURIComponent(vRef)}&download=true&filename=${encodeURIComponent(img.title || 'video')}`
-                          : `/api/download-image?url=${encodeURIComponent(img.rawOriginalUrl || img.originalUrl || img.previewUrl)}&referer=${encodeURIComponent(album.sourceUrl || '')}&filename=${encodeURIComponent(fname)}`;
-                        const link = document.createElement('a');
-                        link.href = dlUrl;
-                        link.setAttribute('download', fname);
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                      }}
-                      className="p-1.5 rounded-lg bg-black/80 hover:bg-black text-slate-200 hover:text-white border border-white/20 transition-colors shadow-sm"
-                      title={isVideo ? 'Baixar Vídeo MP4' : isGif ? 'Baixar GIF' : 'Baixar Foto Original'}
-                    >
-                      <Download size={13} />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm('Deseja remover este item do álbum?')) {
-                          removeImagesFromAlbum(album.id, [img.id]);
-                        }
-                      }}
-                      className="p-1.5 rounded-lg bg-black/80 hover:bg-rose-900/90 text-rose-300 hover:text-rose-100 border border-white/20 transition-colors shadow-sm"
-                      title="Remover do Álbum"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                )}
-
-                {/* Capa Atual Badge */}
-                {(() => {
-                  const isCurrentCover = !!(
-                    (album.rawCoverImage && (img.rawOriginalUrl === album.rawCoverImage || img.originalUrl === album.rawCoverImage || img.rawThumbnailUrl === album.rawCoverImage || img.thumbnailUrl === album.rawCoverImage)) ||
-                    (album.coverImage && (img.originalUrl === album.coverImage || img.thumbnailUrl === album.coverImage || img.rawOriginalUrl === album.coverImage))
-                  );
-                  if (!isCurrentCover || isInlinePlaying) return null;
-                  return (
-                    <span className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-full bg-amber-500/90 backdrop-blur-md border border-amber-400/50 text-[9px] font-bold text-white flex items-center gap-1 shadow-md z-10">
-                      <Check size={10} className="stroke-[3]" /> Capa do Álbum
-                    </span>
-                  );
-                })()}
-
-                {/* Aesthetic Star Score (only for images) */}
-                {!isVideo && (
-                  <div className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-mono text-amber-400 flex items-center gap-1 font-bold">
-                    <Star size={10} className="fill-amber-400" />
-                    {img.aestheticScore}
-                  </div>
-                )}
-                {/* Duration badge for videos */}
-                {isVideo && img.durationSeconds && !isInlinePlaying && (
-                  <div className="absolute bottom-2.5 left-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-mono text-slate-300 font-bold">
-                    {Math.floor(img.durationSeconds / 60)}:{String(Math.round(img.durationSeconds % 60)).padStart(2, '0')}
-                  </div>
-                )}
-              </div>
-
-              {/* Card Footer */}
-              <div className="p-2.5 sm:p-3 text-xs">
-                <div className="flex items-center justify-between gap-1 group/title">
-                  <h4
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenRename(img);
-                    }}
-                    className="font-semibold text-slate-100 truncate group-hover/title:text-brand-300 transition-colors cursor-pointer flex-1"
-                    title="Clique para renomear este item"
-                  >
-                    {img.title && img.title.startsWith('#') ? img.title : `#${idx + 1} ${img.title || (isVideo ? 'Vídeo' : 'Foto')}`}
-                  </h4>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenRename(img);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-brand-300 hover:bg-white/10 rounded transition-all shrink-0"
-                    title="Renomear item"
-                  >
-                    <Edit2 size={11} />
-                  </button>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mt-1.5 pt-1.5 border-t border-white/5">
-                  {img.fileSizeBytes > 0 ? (
-                    <span className="px-2 py-0.5 rounded-md bg-cyan-950/70 border border-cyan-500/30 text-cyan-300 font-mono text-[9px] font-bold flex items-center gap-1 shadow-sm">
-                      <HardDrive size={10} className="text-cyan-400 shrink-0" />
-                      {formatFileSize(img.fileSizeBytes)}
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded-md bg-slate-800/80 border border-slate-700/50 text-slate-400 font-mono text-[9px] font-medium flex items-center gap-1 shadow-sm" title="Tamanho do arquivo pendente de sincronização">
-                      <Clock size={10} className="text-slate-500 shrink-0" />
-                      Pendente
-                    </span>
-                  )}
-                  <span className="px-1.5 py-0.5 rounded-md bg-surface-elevated/90 border border-border text-slate-300 font-mono text-[9px] flex items-center gap-1">
-                    {isVideo ? getVideoResolutionInfo(img).dimensions : (img.height ? `${img.width}×${img.height}` : img.aspectRatio)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          );
-        });
-      })()}
+          return deduplicatedImages.map((img, idx) => (
+            <AlbumMediaCard
+              key={img.id}
+              img={img}
+              idx={idx}
+              album={album}
+              isSelected={selectedImageIds.includes(img.id)}
+              cardViewMode={cardViewMode}
+              isInlinePlaying={Boolean(playingVideoIds.includes(img.id))}
+              refreshingStreamId={refreshingStreamId}
+              savingVideoId={savingVideoId}
+              coverUpdatingId={coverUpdatingId}
+              jobs={jobs}
+              toggleSelectImage={toggleSelectImage}
+              toggleFavoriteImage={toggleFavoriteImage}
+              openLightbox={openLightbox}
+              toggleInlinePlay={toggleInlinePlay}
+              closeInlinePlay={closeInlinePlay}
+              handleRefreshSingleVideo={handleRefreshSingleVideo}
+              handleInitiateSaveSingleVideo={handleInitiateSaveSingleVideo}
+              setActivePlayingVideo={setActivePlayingVideo}
+              setAlbumCover={setAlbumCover}
+              setCoverUpdatingId={setCoverUpdatingId}
+              handleOpenRename={handleOpenRename}
+              removeImagesFromAlbum={removeImagesFromAlbum}
+              addNotification={addNotification}
+              checkItemSavedStatus={checkItemSavedStatus}
+              getVideoResolutionInfo={getVideoResolutionInfo}
+            />
+          ));
+        })()}
       </div>
 
       {/* Modal de Confirmação de Exclusão do Álbum */}
       {isConfirmingDeleteAlbum && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setIsConfirmingDeleteAlbum(false)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setIsConfirmingDeleteAlbum(false)}
           >
-            <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
-              <Trash2 size={24} />
-            </div>
-            <div>
-              <h4 className="font-bold text-base text-white">Excluir este Álbum?</h4>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                Tem certeza que deseja apagar o álbum <span className="font-semibold text-slate-200">"{album.title}"</span>? Ele será movido para a lixeira do app.
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsConfirmingDeleteAlbum(false)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await deleteAlbum(album.id);
-                  setIsConfirmingDeleteAlbum(false);
-                  navigateToView('gallery');
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                Sim, Excluir
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal de Renomear Item Individual (Vídeo ou Foto) */}
-      {imageToRename && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => !isSavingImageTitle && setImageToRename(null)}
-        >
-          <div
-            className="bg-slate-900 border border-border rounded-3xl p-5 sm:p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-brand-500/10 border border-brand-500/20 text-brand-400">
-                  {imageToRename.isVideo ? <Video size={18} /> : <Edit2 size={18} />}
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-100">
-                    {imageToRename.isVideo ? 'Renomear Vídeo' : 'Renomear Item'}
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    Altere o título para organização e salvamento na galeria
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setImageToRename(null)}
-                disabled={isSavingImageTitle}
-                className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <form
-              onSubmit={e => {
-                e.preventDefault();
-                handleSaveImageTitle();
-              }}
-              className="space-y-4"
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
             >
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                  Nome / Título
-                </label>
-                <input
-                  type="text"
-                  autoFocus
-                  value={newImageTitle}
-                  onChange={e => setNewImageTitle(e.target.value)}
-                  placeholder={imageToRename.isVideo ? "Nome do vídeo..." : "Título da foto..."}
-                  className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 font-medium"
-                />
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center mx-auto">
+                <Trash2 size={24} />
               </div>
-
-              <div className="flex items-center gap-2 pt-1">
+              <div>
+                <h4 className="font-bold text-base text-white">{isEn ? 'Delete this Album?' : 'Excluir este Álbum?'}</h4>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  {isEn ? 'Are you sure you want to delete album ' : 'Tem certeza que deseja apagar o álbum '}<span className="font-semibold text-slate-200">"{album.title}"</span>{isEn ? '? It will be moved to app trash.' : '? Ele será movido para a lixeira do app.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
                 <button
                   type="button"
-                  disabled={isSavingImageTitle}
-                  onClick={() => setImageToRename(null)}
-                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors disabled:opacity-50"
+                  onClick={() => setIsConfirmingDeleteAlbum(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
                 >
                   Cancelar
                 </button>
                 <button
-                  type="submit"
-                  disabled={!newImageTitle.trim() || isSavingImageTitle}
-                  className="flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold shadow-glow-brand transition-all flex items-center justify-center gap-1.5"
+                  type="button"
+                  onClick={async () => {
+                    await deleteAlbum(album.id);
+                    setIsConfirmingDeleteAlbum(false);
+                    navigateToView('gallery');
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
                 >
-                  {isSavingImageTitle ? (
-                    <>
-                      <Loader2 size={13} className="animate-spin" />
-                      <span>Salvando...</span>
-                    </>
-                  ) : (
-                    <span>Salvar</span>
-                  )}
+                  Sim, Excluir
                 </button>
               </div>
-            </form>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
+      )}
+
+      {/* Modal de Renomear Item Individual (Vídeo ou Foto) */}
+      {imageToRename && (
+        <ModalPortal>
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => !isSavingImageTitle && setImageToRename(null)}
+          >
+            <div
+              className="bg-slate-900 border border-border rounded-3xl p-5 sm:p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-brand-500/10 border border-brand-500/20 text-brand-400">
+                    {imageToRename.isVideo ? <Video size={18} /> : <Edit2 size={18} />}
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-100">
+                      {imageToRename.isVideo ? (isEn ? 'Rename Video' : 'Renomear Vídeo') : (isEn ? 'Rename Item' : 'Renomear Item')}
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      {isEn ? 'Change title for library organization and saving' : 'Altere o título para organização e salvamento na galeria'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setImageToRename(null)}
+                  disabled={isSavingImageTitle}
+                  className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <form
+                onSubmit={e => {
+                  e.preventDefault();
+                  handleSaveImageTitle();
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                    {isEn ? 'Name / Title' : 'Nome / Título'}
+                  </label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={newImageTitle}
+                    onChange={e => setNewImageTitle(e.target.value)}
+                    placeholder={imageToRename.isVideo ? (isEn ? 'Video name...' : 'Nome do vídeo...') : (isEn ? 'Photo title...' : 'Título da foto...')}
+                    className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 font-medium"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={isSavingImageTitle}
+                    onClick={() => setImageToRename(null)}
+                    className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors disabled:opacity-50"
+                  >
+                    {isEn ? "Cancel" : "Cancelar"}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!newImageTitle.trim() || isSavingImageTitle}
+                    className="flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold shadow-glow-brand transition-all flex items-center justify-center gap-1.5"
+                  >
+                    {isSavingImageTitle ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin" />
+                        <span>{isEn ? "Saving..." : "Salvando..."}</span>
+                      </>
+                    ) : (
+                      <span>{isEn ? "Save" : "Salvar"}</span>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </ModalPortal>
       )}
 
       {/* Folder Select Modal for Saving Video(s) */}
       <FolderSelectModal
         isOpen={folderModalState.isOpen}
         onClose={() => setFolderModalState({ isOpen: false, mode: 'single' })}
-        title={folderModalState.mode === 'batch' ? `Salvar ${selectedVideos.length} Vídeos na Pasta` : 'Escolha a Pasta para Salvar o Vídeo'}
-        subtitle="Selecione uma pasta existente da Galeria de Vídeos ou crie uma nova pasta."
+        title={folderModalState.mode === 'batch' ? (isEn ? `Save ${selectedVideos.length} Videos to Folder` : `Salvar ${selectedVideos.length} Vídeos na Pasta`) : (isEn ? 'Choose Folder to Save Video' : 'Escolha a Pasta para Salvar o Vídeo')}
+        subtitle={isEn ? 'Select an existing Video Gallery folder or create a new folder.' : 'Selecione uma pasta existente da Galeria de Vídeos ou crie uma nova pasta.'}
         existingFolders={videoFolders.map(f => f.name)}
-        defaultFolder={settings.defaultVideoFolder || 'Extraídos'}
+        defaultFolder={settings.defaultVideoFolder || (isEn ? 'Extracted' : 'Extraídos')}
         type="video"
         onConfirm={(selectedFolder: string) => {
           if (folderModalState.mode === 'batch') {

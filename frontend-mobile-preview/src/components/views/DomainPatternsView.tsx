@@ -5,7 +5,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { backendApi } from '../../services/realApi';
 
 export const DomainPatternsView: React.FC = () => {
-  const { domainPatterns, navigateToView, settings } = useAppStore();
+  const { domainPatterns, settings } = useAppStore();
   const tDom = translations[settings.language].domainPatterns;
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
 
@@ -42,15 +42,8 @@ export const DomainPatternsView: React.FC = () => {
           </div>
           <h3 className="font-bold text-sm text-slate-200">{tDom.noDomainsMapped || "Nenhum Domínio Mapeado no Momento"}</h3>
           <p className="text-xs text-slate-400 leading-relaxed">
-            {tDom.noDomainsDesc || 'As regras de inteligência são gravadas automaticamente conforme os Agentes extraem novos sites ou quando você usa a bancada Ensinar a IA.'}
+            {tDom.noDomainsDesc || 'As regras de inteligência são gravadas e aprendidas automaticamente conforme os Agentes extraem novos sites.'}
           </p>
-          <button
-            onClick={() => navigateToView('teaching')}
-            className="px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs shadow-glow-brand transition-all inline-flex items-center gap-2"
-          >
-            <Plus size={14} />
-            <span>{tDom.teachNewRule || 'Ensinar Nova Regra de Domínio'}</span>
-          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -100,7 +93,7 @@ export const DomainPatternsView: React.FC = () => {
                   <button
                     onClick={(e) => handleDeletePattern(activePattern.domain, e)}
                     className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
-                    title="Excluir regra"
+                    title={settings?.language === "en-US" ? "Delete rule" : "Excluir regra"}
                   >
                     <Trash2 size={15} />
                   </button>

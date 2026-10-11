@@ -28,10 +28,12 @@ import {
 import { useAppStore } from '../../store/useAppStore';
 import { ExtractionJob } from '../../types';
 import { formatFileSize } from '../../utils/formatters';
+import { ModalPortal } from '../common/ModalPortal';
 
 export const JobHistoryView: React.FC = () => {
   const { settings } = useAppStore();
-  const tJobs = translations[settings.language].jobHistory;
+  const isEn = settings?.language === 'en-US';
+  const tJobs: any = translations[settings.language].jobHistory || {};
   const { jobs, navigateToView, cancelJob, deleteJob, clearCompletedJobs, addLog, pauseJob, resumeJob, retryJob } = useAppStore();
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed' | 'cancelled'>('all');
   const [search, setSearch] = useState('');
@@ -153,7 +155,7 @@ export const JobHistoryView: React.FC = () => {
     addLog({
       level: 'info',
       category: 'JOB_MANAGEMENT',
-      message: `Re-executando tarefa #${job.id} automaticamente para URL: ${job.url}`
+      message: isEn ? `Re-running task #${job.id} automatically for URL: ${job.url}` : `Re-executando tarefa #${job.id} automaticamente para URL: ${job.url}`
     });
     await retryJob(job);
   };
@@ -175,10 +177,10 @@ export const JobHistoryView: React.FC = () => {
         <div>
           <h1 className="text-lg sm:text-2xl font-extrabold text-slate-100 flex items-center gap-2">
             <ListTodo size={22} className="text-brand-400 shrink-0" />
-            <span>{tJobs.title || 'Gestão de Tarefas & Auditoria de Jobs'}</span>
+            <span>{tJobs.title || 'Task Management & Job Audit'}</span>
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            {tJobs.subtitle || 'Controle de fila em segundo plano, monitoramento de throughput, re-execução e telemetria'}
+            {tJobs.subtitle || 'Background queue control, throughput monitoring, re-execution and telemetry'}
           </p>
         </div>
 
@@ -188,7 +190,7 @@ export const JobHistoryView: React.FC = () => {
             className="px-3.5 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-glow-brand transition-colors shrink-0"
           >
             <Zap size={13} />
-            <span>{tJobs.newExtraction || 'Nova Extração'}</span>
+            <span>{tJobs.newExtraction || 'New Extraction'}</span>
           </button>
           <button
             onClick={handleExportJobs}
@@ -196,7 +198,7 @@ export const JobHistoryView: React.FC = () => {
             title={tJobs.exportReportTitle || "Exportar relatório de jobs em JSON"}
           >
             <Download size={13} />
-            <span>{tJobs.exportReport || 'Exportar Relatório'}</span>
+            <span>{tJobs.exportReport || 'Export Report'}</span>
           </button>
           {completedCount > 0 && (
             <button
@@ -205,7 +207,7 @@ export const JobHistoryView: React.FC = () => {
               title={tJobs.clearCompletedTitle || "Limpar jobs concluídos do histórico"}
             >
               <Trash2 size={13} />
-              <span>{tJobs.clearCompleted || 'Limpar Concluídos'}</span>
+              <span>{tJobs.clearCompleted || 'Clear Completed'}</span>
             </button>
           )}
         </div>
@@ -238,7 +240,7 @@ export const JobHistoryView: React.FC = () => {
             <Zap size={20} />
           </div>
           <div>
-            <span className="text-[10px] text-slate-400 uppercase font-mono font-bold block">{tJobs.photosExtracted || 'Fotos Extraídas'}</span>
+            <span className="text-[10px] text-slate-400 uppercase font-mono font-bold block">{tJobs.photosExtracted || (isEn ? "Photos Extracted" : "Fotos Extraídas")}</span>
             <span className="text-base sm:text-xl font-extrabold text-slate-100">{totalPhotosExtracted}</span>
           </div>
         </div>
@@ -262,7 +264,7 @@ export const JobHistoryView: React.FC = () => {
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder={tJobs.searchPlaceholder || "Pesquisar por título, URL ou modelo IA..."}
+            placeholder={tJobs.searchPlaceholder || "Search by title, URL or AI model..."}
             className="w-full h-9 pl-9 pr-3 rounded-xl bg-surface-elevated border border-border text-slate-100 placeholder-slate-500 text-xs outline-none focus:border-brand-500 font-mono"
           />
         </div>
@@ -291,7 +293,7 @@ export const JobHistoryView: React.FC = () => {
               statusFilter === 'completed' ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            {(tJobs.tabCompleted || 'Concluídos ({count})').replace('{count}', String(completedCount))}
+            {(tJobs.tabCompleted || (isEn ? "Completed ({count})" : "Concluídos ({count})")).replace('{count}', String(completedCount))}
           </button>
           <button
             onClick={() => setStatusFilter('cancelled')}
@@ -328,7 +330,7 @@ export const JobHistoryView: React.FC = () => {
                       {isVideoSave && (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
                           <Film size={11} />
-                          <span>{tJobs.saveVideo || 'SALVAR VÍDEO'}</span>
+                          <span>{tJobs.saveVideo || 'SAVE VIDEO'}</span>
                         </span>
                       )}
                       <span
@@ -377,7 +379,7 @@ export const JobHistoryView: React.FC = () => {
                     <button
                       onClick={() => deleteJob(job.id)}
                       className="p-2 rounded-xl bg-surface-elevated hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 border border-border transition-colors"
-                      title="Excluir Registro"
+                      title={tJobs.deleteRecord || "Delete Record"}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -406,42 +408,42 @@ export const JobHistoryView: React.FC = () => {
                     <div>
                       <span className="text-slate-500 text-[10px] block">Baixado / Total</span>
                       <span className="text-cyan-400 font-bold">
-                        {formatFileSize(job.downloadedBytes || 0)} / {job.totalBytes ? formatFileSize(job.totalBytes) : 'Fluxo Vivo'}
+                        {formatFileSize(job.downloadedBytes || 0)} / {job.totalBytes ? formatFileSize(job.totalBytes) : (isEn ? 'Live Stream' : 'Fluxo Vivo')}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500 text-[10px] block">Velocidade</span>
+                      <span className="text-slate-500 text-[10px] block">{isEn ? "Speed" : "Velocidade"}</span>
                       <span className="text-brand-400 font-bold">{job.throughputMbps || 0} MB/s</span>
                     </div>
                     <div>
-                      <span className="text-slate-500 text-[10px] block">Duração</span>
+                      <span className="text-slate-500 text-[10px] block">{tJobs.duration || 'Duration'}</span>
                       <span className={`font-bold ${job.status === 'active' ? 'text-brand-400 animate-pulse' : 'text-slate-200'}`}>
                         {getJobDuration(job)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500 text-[10px] block">Destino</span>
-                      <span className="text-slate-300 truncate block">Pasta {job.folder || 'Extraídos'}</span>
+                      <span className="text-slate-500 text-[10px] block">{isEn ? "Destination" : "Destino"}</span>
+                      <span className="text-slate-300 truncate block">{isEn ? `Folder ${job.folder || "Extracted"}` : `Pasta ${job.folder || "Extraídos"}`}</span>
                     </div>
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-surface-elevated/60 p-3 rounded-2xl border border-white/5 font-mono text-xs">
                     <div>
-                      <span className="text-slate-500 text-[10px] block">Fotos Originais</span>
+                      <span className="text-slate-500 text-[10px] block">{isEn ? "Original Photos" : "Fotos Originais"}</span>
                       <span className="text-emerald-400 font-bold">{job.resolvedOriginalCount}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500 text-[10px] block">Duração</span>
+                      <span className="text-slate-500 text-[10px] block">{tJobs.duration || 'Duration'}</span>
                       <span className={`font-bold ${job.status === 'active' ? 'text-brand-400 animate-pulse' : 'text-slate-200'}`}>
                         {getJobDuration(job)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500 text-[10px] block">Candidatos (DOM)</span>
+                      <span className="text-slate-500 text-[10px] block">{isEn ? "DOM Candidates" : "Candidatos (DOM)"}</span>
                       <span className="text-amber-400 font-bold">{job.discoveredImagesCount || 0}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500 text-[10px] block">Motor IA</span>
+                      <span className="text-slate-500 text-[10px] block">{isEn ? "AI Engine" : "Motor IA"}</span>
                       <span className="text-slate-300 truncate block">{job.aiModel || 'Qwen 2.5:32b'}</span>
                     </div>
                   </div>
@@ -457,16 +459,16 @@ export const JobHistoryView: React.FC = () => {
                           className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-glow-brand transition-colors"
                         >
                           <Activity size={14} />
-                          <span>Abrir no Live Monitor</span>
+                          <span>{isEn ? "Open in Live Monitor" : "Abrir no Live Monitor"}</span>
                         </button>
                       )}
                       <button
                         onClick={() => pauseJob(job.id)}
                         className="px-4 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600 text-amber-400 hover:text-white border border-amber-500/30 font-bold text-xs flex items-center gap-1.5 transition-colors"
-                        title="Pausar tarefa"
+                        title={isEn ? "Pause task" : "Pausar tarefa"}
                       >
                         <Pause size={14} />
-                        <span>Pausar</span>
+                        <span>{isEn ? "Pause" : "Pausar"}</span>
                       </button>
                       <button
                         onClick={() => cancelJob(job.id)}
@@ -483,10 +485,10 @@ export const JobHistoryView: React.FC = () => {
                       <button
                         onClick={() => resumeJob(job.id)}
                         className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors"
-                        title="Retomar tarefa"
+                        title={isEn ? "Resume task" : "Retomar tarefa"}
                       >
                         <Play size={14} />
-                        <span>Retomar</span>
+                        <span>{isEn ? "Resume" : "Retomar"}</span>
                       </button>
                       <button
                         onClick={() => cancelJob(job.id)}
@@ -504,7 +506,7 @@ export const JobHistoryView: React.FC = () => {
                       className="px-4 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 font-bold text-xs flex items-center gap-1.5 transition-colors"
                     >
                       <XCircle size={14} />
-                      <span>Remover da Fila</span>
+                      <span>{isEn ? "Remove from Queue" : "Remover da Fila"}</span>
                     </button>
                   )}
 
@@ -516,14 +518,14 @@ export const JobHistoryView: React.FC = () => {
                           className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-glow-brand transition-colors"
                         >
                           <Film size={14} />
-                          <span>{tJobs.viewInVideoGallery || 'Ver na Galeria de Vídeos'}</span>
+                          <span>{tJobs.viewInVideoGallery || 'View in Video Gallery'}</span>
                         </button>
                       ) : (
                         <button
                           onClick={() => navigateToView('album-detail', job.resultAlbumId || job.id)}
                           className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-glow-brand transition-colors"
                         >
-                          <span>Abrir Álbum Extraído</span>
+                          <span>{tJobs.openExtractedAlbum || 'Open Extracted Album'}</span>
                           <ArrowRight size={14} />
                         </button>
                       )}
@@ -533,7 +535,7 @@ export const JobHistoryView: React.FC = () => {
                           className="px-3.5 py-2 rounded-xl bg-surface-elevated hover:bg-surface-hover border border-border text-slate-300 hover:text-white font-semibold text-xs flex items-center gap-1.5 transition-colors"
                         >
                           <RotateCcw size={13} />
-                          <span>Re-extrair</span>
+                          <span>{isEn ? "Re-extract" : "Re-extrair"}</span>
                         </button>
                       )}
                     </>
@@ -545,7 +547,7 @@ export const JobHistoryView: React.FC = () => {
                       className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-glow-brand transition-colors"
                     >
                       <RotateCcw size={14} />
-                      <span>Tentar Novamente</span>
+                      <span>{isEn ? "Try Again" : "Tentar Novamente"}</span>
                     </button>
                   )}
                 </div>
@@ -555,13 +557,13 @@ export const JobHistoryView: React.FC = () => {
         ) : (
           <div className="py-16 text-center text-slate-500 glass-panel rounded-3xl border border-border space-y-3">
             <ListTodo size={40} className="mx-auto text-slate-600 opacity-60" />
-            <p className="text-sm font-semibold text-slate-400">Nenhum job encontrado para os filtros selecionados.</p>
+            <p className="text-sm font-semibold text-slate-400">{isEn ? "No tasks found for selected filters." : "Nenhum job encontrado para os filtros selecionados."}</p>
             <button
               onClick={() => navigateToView('extractor')}
               className="px-4 py-2 rounded-xl bg-brand-600 text-white text-xs font-bold inline-flex items-center gap-2 shadow-glow-brand"
             >
               <Zap size={14} />
-              <span>Iniciar Nova Extração</span>
+              <span>{isEn ? "Start New Extraction" : "Iniciar Nova Extração"}</span>
             </button>
           </div>
         )}
@@ -569,69 +571,71 @@ export const JobHistoryView: React.FC = () => {
 
       {/* Deep Audit Modal */}
       {inspectedJob && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-surface rounded-3xl border border-border max-w-lg w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center gap-2">
-                <Info size={18} className="text-brand-400" />
-                <h3 className="font-bold text-sm text-slate-100">Auditoria & Telemetria do Job</h3>
+        <ModalPortal>
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-surface rounded-3xl border border-border max-w-lg w-full p-6 space-y-4 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <div className="flex items-center gap-2">
+                  <Info size={18} className="text-brand-400" />
+                  <h3 className="font-bold text-sm text-slate-100">Auditoria & Telemetria do Job</h3>
+                </div>
+                <button
+                  onClick={() => setInspectedJob(null)}
+                  className="text-slate-400 hover:text-white p-1"
+                >
+                  <X size={16} />
+                </button>
               </div>
-              <button
-                onClick={() => setInspectedJob(null)}
-                className="text-slate-400 hover:text-white p-1"
-              >
-                <X size={16} />
-              </button>
-            </div>
 
-            <div className="space-y-2.5 text-xs font-mono">
-              <div className="flex justify-between py-1 border-b border-white/5">
-                <span className="text-slate-400">ID da Sessão:</span>
-                <span className="text-slate-200 font-bold">{inspectedJob.id}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-white/5">
-                <span className="text-slate-400">Status:</span>
-                <span className="text-emerald-400 font-bold uppercase">{inspectedJob.status}</span>
-              </div>
-              <div className="flex flex-col sm:flex-row sm:items-start justify-between py-1 border-b border-white/5 gap-2">
-                <span className="text-slate-400 whitespace-nowrap">URL Alvo:</span>
-                <div className="flex items-center gap-2 min-w-0 max-w-full">
-                  <span className="text-brand-400 break-all">{inspectedJob.url}</span>
-                  <button
-                    onClick={() => handleCopyUrl(inspectedJob.url, 'modal-' + inspectedJob.id)}
-                    className="p-1 rounded bg-surface-elevated hover:bg-surface-hover text-slate-400 hover:text-white transition-colors shrink-0"
-                    title="Copiar URL"
-                  >
-                    {copiedId === 'modal-' + inspectedJob.id ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                  </button>
+              <div className="space-y-2.5 text-xs font-mono">
+                <div className="flex justify-between py-1 border-b border-white/5">
+                  <span className="text-slate-400">{isEn ? "Session ID:" : "ID da Sessão:"}</span>
+                  <span className="text-slate-200 font-bold">{inspectedJob.id}</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-white/5">
+                  <span className="text-slate-400">Status:</span>
+                  <span className="text-emerald-400 font-bold uppercase">{inspectedJob.status}</span>
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between py-1 border-b border-white/5 gap-2">
+                  <span className="text-slate-400 whitespace-nowrap">URL Alvo:</span>
+                  <div className="flex items-center gap-2 min-w-0 max-w-full">
+                    <span className="text-brand-400 break-all">{inspectedJob.url}</span>
+                    <button
+                      onClick={() => handleCopyUrl(inspectedJob.url, 'modal-' + inspectedJob.id)}
+                      className="p-1 rounded bg-surface-elevated hover:bg-surface-hover text-slate-400 hover:text-white transition-colors shrink-0"
+                      title="Copiar URL"
+                    >
+                      {copiedId === 'modal-' + inspectedJob.id ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex justify-between py-1 border-b border-white/5">
+                  <span className="text-slate-400">Motor de IA:</span>
+                  <span className="text-slate-200">{inspectedJob.aiModel || 'Qwen 2.5:32b'}</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-white/5">
+                  <span className="text-slate-400">Fotos Originais Resolvidas:</span>
+                  <span className="text-emerald-400 font-bold">{inspectedJob.resolvedOriginalCount}</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-white/5">
+                  <span className="text-slate-400">Candidatos Analisados no DOM:</span>
+                  <span className="text-amber-400 font-bold">{inspectedJob.discoveredImagesCount || 0}</span>
+                </div>
+                <div className="flex justify-between py-1 border-b border-white/5">
+                  <span className="text-slate-400">{isEn ? "Failures / Rejections:" : "Falhas / Rejeições:"}</span>
+                  <span className="text-rose-400 font-bold">{inspectedJob.failedCount || 0}</span>
                 </div>
               </div>
-              <div className="flex justify-between py-1 border-b border-white/5">
-                <span className="text-slate-400">Motor de IA:</span>
-                <span className="text-slate-200">{inspectedJob.aiModel || 'Qwen 2.5:32b'}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-white/5">
-                <span className="text-slate-400">Fotos Originais Resolvidas:</span>
-                <span className="text-emerald-400 font-bold">{inspectedJob.resolvedOriginalCount}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-white/5">
-                <span className="text-slate-400">Candidatos Analisados no DOM:</span>
-                <span className="text-amber-400 font-bold">{inspectedJob.discoveredImagesCount || 0}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-white/5">
-                <span className="text-slate-400">Falhas / Rejeições:</span>
-                <span className="text-rose-400 font-bold">{inspectedJob.failedCount || 0}</span>
-              </div>
-            </div>
 
-            <button
-              onClick={() => setInspectedJob(null)}
-              className="w-full py-2.5 rounded-xl bg-brand-600 text-white font-bold text-xs transition-colors"
-            >
-              Fechar Auditoria
-            </button>
+              <button
+                onClick={() => setInspectedJob(null)}
+                className="w-full py-2.5 rounded-xl bg-brand-600 text-white font-bold text-xs transition-colors"
+              >
+                {tJobs.closeAudit || 'Close Audit'}
+              </button>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );

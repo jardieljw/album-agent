@@ -1,6 +1,6 @@
 """
-Serviço de gerenciamento do armazenamento de vídeos no disco (data/videos/).
-Manipulação física de arquivos, pastas, metadados e favoritos.
+Video storage management service on disk (data/videos/).
+Physical manipulation of files, folders, metadata, and favorites.
 """
 
 import os
@@ -11,9 +11,13 @@ import hashlib
 import time
 import logging
 import subprocess
+
+# Evita abertura de janelas de terminal piscando no Windows ao executar FFmpeg/FFprobe
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 from typing import Dict, Any, List, Optional
 import unicodedata
 import httpx
+import urllib.parse
 from pathlib import Path
 
 try:
@@ -51,7 +55,7 @@ def get_video_duration(video_path: str) -> float:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 video_path
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5, creationflags=_NO_WINDOW)
             if res.returncode == 0 and res.stdout.strip():
                 dur = float(res.stdout.strip())
                 if dur > 0:
@@ -92,24 +96,52 @@ def _evaluate_frame_quality(img_path: str) -> float:
         return 50.0
 
 
+def _safe_url_for_ffmpeg(url: str) -> str:
+    """Escapes spaces and Unicode characters in URL paths so FFmpeg can parse them cleanly."""
+    if not url:
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        path = urllib.parse.quote(parts.path, safe="/%")
+        query = urllib.parse.quote(parts.query, safe="=&?%")
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
+    except Exception:
+        return url
+
+
+def _get_smart_candidate_timestamps(duration_sec: float, timestamp_sec: Optional[float] = None) -> List[float]:
+    """
+    Returns candidate timestamps in seconds for thumbnail extraction.
+    GUARANTEE: Never extracts from the beginning of the video (avoids 0s, opening logos, black screens, credits).
+    Prioritizes middle and action sections of the video content.
+    """
+    if timestamp_sec is not None and timestamp_sec > 5.0:
+        return [timestamp_sec]
+
+    dur = float(duration_sec or 0.0)
+    if dur > 30.0:
+        # Standard/Long video: 35%, 50%, 20%, 70% into duration
+        return [dur * 0.35, dur * 0.50, dur * 0.20, dur * 0.70]
+    elif dur > 10.0:
+        # Medium clip (10s - 30s): 40%, 65%, 25%
+        return [dur * 0.40, dur * 0.65, max(3.0, dur * 0.25)]
+    elif dur > 4.0:
+        # Short clip (4s - 10s): 50%, 70%, 35%
+        return [dur * 0.50, dur * 0.70, dur * 0.35]
+    else:
+        # Unknown duration: probe representative action offsets (never beginning!)
+        return [30.0, 45.0, 15.0, 60.0, 10.0, 4.0]
+
+
 def generate_thumbnail_ffmpeg(video_path: str, thumb_path: str, timestamp_sec: Optional[float] = None) -> bool:
-    """Extracts a sharp 640x360 thumbnail from the middle of the video, avoiding intros/vinhetas."""
+    """Extracts a sharp 640x360 thumbnail from the middle of the local video, strictly avoiding intros/vinhetas."""
     ffmpeg_exe = get_ffmpeg_path()
     if not ffmpeg_exe or not video_path or not os.path.exists(video_path):
         return False
     try:
         os.makedirs(os.path.dirname(os.path.abspath(thumb_path)), exist_ok=True)
         dur = get_video_duration(video_path)
-        
-        # Decide timestamps to sample:
-        # Prioritize middle of video content (25% to 65% of duration) to bypass any intro/logos
-        candidates_ts = []
-        if timestamp_sec is not None and timestamp_sec > 10:
-            candidates_ts.append(timestamp_sec)
-        elif dur > 15:
-            candidates_ts = [dur * 0.30, dur * 0.50, dur * 0.20, dur * 0.65]
-        else:
-            candidates_ts = [dur * 0.4, 6.0, 3.0]
+        candidates_ts = _get_smart_candidate_timestamps(dur, timestamp_sec)
 
         best_score = -1.0
         best_temp_path = None
@@ -132,7 +164,7 @@ def generate_thumbnail_ffmpeg(video_path: str, thumb_path: str, timestamp_sec: O
                 "-vf", "scale=640:-1",
                 temp_candidate
             ]
-            res = subprocess.run(cmd, capture_output=True, timeout=15)
+            res = subprocess.run(cmd, capture_output=True, timeout=15, creationflags=_NO_WINDOW)
             if os.path.exists(temp_candidate) and os.path.getsize(temp_candidate) > 500:
                 score = _evaluate_frame_quality(temp_candidate)
                 if score > best_score:
@@ -160,25 +192,115 @@ def generate_thumbnail_ffmpeg(video_path: str, thumb_path: str, timestamp_sec: O
             os.replace(best_temp_path, thumb_path)
             return True
 
-        # Fallback if specific seek failed
+        # Fallback if specific seek failed: seek at 15s (still bypassing intro)
         cmd_fb = [
             ffmpeg_exe,
             "-y",
-            "-ss", "00:00:10",
+            "-ss", "00:00:15",
             "-i", video_path,
             "-vframes", "1",
             "-vf", "scale=640:-1",
             thumb_path
         ]
-        subprocess.run(cmd_fb, capture_output=True, timeout=15)
+        subprocess.run(cmd_fb, capture_output=True, timeout=15, creationflags=_NO_WINDOW)
         return os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 500
     except Exception as e:
         logger.warning(f"FFmpeg thumbnail extraction failed for {video_path}: {e}")
         return False
 
 
-def download_thumbnail_from_url(url: str, thumb_path: str, referer: Optional[str] = None) -> bool:
-    """Downloads remote thumbnail image and saves to disk cache."""
+def generate_thumbnail_remote_ffmpeg(
+    video_url: str,
+    thumb_path: str,
+    token: Optional[str] = None,
+    duration_sec: float = 0.0,
+    timestamp_sec: Optional[float] = None
+) -> bool:
+    """
+    Extracts a sharp 640x360 thumbnail directly from a remote video stream (e.g. Hugging Face),
+    strictly avoiding the beginning of the video (intros, logos, black screens).
+    Uses HTTP Range requests to seek directly into the action without downloading the full video.
+    """
+    ffmpeg_exe = get_ffmpeg_path()
+    if not ffmpeg_exe or not video_url or not video_url.startswith("http"):
+        return False
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(thumb_path)), exist_ok=True)
+        safe_url = _safe_url_for_ffmpeg(video_url)
+        candidates_ts = _get_smart_candidate_timestamps(duration_sec, timestamp_sec)
+
+        best_score = -1.0
+        best_temp_path = None
+        temp_dir = os.path.dirname(os.path.abspath(thumb_path))
+
+        headers_str = ""
+        if token and "huggingface.co" in safe_url:
+            headers_str = f"Authorization: Bearer {token}\r\n"
+
+        for idx, ts in enumerate(candidates_ts):
+            ts_val = max(1.0, float(ts))
+            h = int(ts_val // 3600)
+            m = int((ts_val % 3600) // 60)
+            s = int(ts_val % 60)
+            ts_str = f"{h:02d}:{m:02d}:{s:02d}"
+
+            temp_candidate = os.path.join(temp_dir, f"tmp_rem_th_{idx}_{os.path.basename(thumb_path)}")
+            cmd = [ffmpeg_exe, "-y"]
+            if headers_str:
+                cmd.extend(["-headers", headers_str])
+            cmd.extend([
+                "-ss", ts_str,
+                "-i", safe_url,
+                "-vframes", "1",
+                "-vf", "scale=640:-1",
+                temp_candidate
+            ])
+
+            try:
+                res = subprocess.run(cmd, capture_output=True, timeout=12, creationflags=_NO_WINDOW)
+                if os.path.exists(temp_candidate) and os.path.getsize(temp_candidate) > 500:
+                    score = _evaluate_frame_quality(temp_candidate)
+                    if score > best_score:
+                        if best_temp_path and os.path.exists(best_temp_path):
+                            try:
+                                os.remove(best_temp_path)
+                            except Exception:
+                                pass
+                        best_score = score
+                        best_temp_path = temp_candidate
+                        if score >= 95.0:
+                            break
+                    else:
+                        try:
+                            os.remove(temp_candidate)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        if best_temp_path and os.path.exists(best_temp_path):
+            if os.path.exists(thumb_path):
+                try:
+                    os.remove(thumb_path)
+                except Exception:
+                    pass
+            os.replace(best_temp_path, thumb_path)
+            return True
+
+        return False
+    except Exception as e:
+        logger.warning(f"Remote FFmpeg thumbnail extraction failed for {video_url}: {e}")
+        return False
+
+
+def download_thumbnail_from_url(
+    url: str,
+    thumb_path: str,
+    referer: Optional[str] = None,
+    token: Optional[str] = None
+) -> bool:
+    """Downloads remote thumbnail image and saves to disk cache, supporting Hugging Face auth."""
     if not url or not url.startswith("http"):
         return False
     try:
@@ -189,6 +311,8 @@ def download_thumbnail_from_url(url: str, thumb_path: str, referer: Optional[str
         }
         if referer:
             headers["Referer"] = referer
+        if token and "huggingface.co" in url:
+            headers["Authorization"] = f"Bearer {token}"
         with httpx.Client(timeout=10.0, follow_redirects=True, headers=headers) as client:
             resp = client.get(url)
             if resp.status_code == 200 and len(resp.content) > 500:
@@ -294,14 +418,26 @@ class CloudStorageManager:
         return self._api
 
     def is_connected(self) -> bool:
+        conn, _ = self.get_connection_status()
+        return conn
+
+    def get_connection_status(self) -> tuple[bool, Optional[str]]:
+        if not self.token:
+            return False, None
+        if self.token.startswith("HFAK"):
+            return False, "Token S3 detectado (HFAK...). O Hugging Face Hub exige o User Access Token que comeca com 'hf_'."
+        if not self.token.startswith("hf_"):
+            return False, "Formato invalido. O User Access Token do Hugging Face deve comecar com 'hf_'."
         api = self._get_api()
         if not api:
-            return False
+            if not self.repo_id:
+                return False, "Repositorio nao configurado."
+            return False, "Falha ao inicializar HfApi."
         try:
             api.whoami()
-            return True
-        except Exception:
-            return False
+            return True, None
+        except Exception as e:
+            return False, str(e)
 
     def upload_file(self, local_path_or_bytes, path_in_repo: str) -> Optional[str]:
         if time.time() < self._rate_limited_until:
@@ -347,7 +483,7 @@ class CloudStorageManager:
                 self._rate_limited_until = time.time() + 1500.0  # 25 min backoff
                 print(f"[CloudStorage] Cota de commits da Hugging Face atingida (429). Pausando uploads remotos por 25 minutos.")
             else:
-                print(f"[CloudStorage] Falha no upload para Hugging Face ({norm_path}): {e}")
+                print(f"[CloudStorage] Upload failed to Hugging Face ({norm_path}): {e}")
             return None
 
 
@@ -369,7 +505,7 @@ class CloudStorageManager:
             err_str = str(e)
             if "Entry Not Found" in err_str or "404" in err_str:
                 return True
-            print(f"[CloudStorage] Erro ao excluir {norm_path}: {e}")
+            print(f"[CloudStorage] Error deleting {norm_path}: {e}")
             return False
 
     def upload_json(self, data: Any, path_in_repo: str) -> bool:
@@ -401,7 +537,7 @@ class CloudStorageManager:
             with open(local, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"[CloudStorage] Erro ao baixar JSON {norm_path}: {e}")
+            print(f"[CloudStorage] Error downloading JSON {norm_path}: {e}")
             return None
 
     def list_files_in_folder(self, folder_prefix: str) -> List[str]:
@@ -453,7 +589,7 @@ class CloudStorageManager:
         default_stats = {
             "is_connected": False,
             "provider": "Hugging Face Hub (Dataset LFS)",
-            "repo_id": self.repo_id or "Não configurado",
+            "repo_id": self.repo_id or "Not configured",
             "total_bytes_used": 0,
             "max_bytes_limit": self.max_cloud_bytes,
             "used_percentage": 0.0,
@@ -521,7 +657,7 @@ class VideoService:
                     try:
                         with open(self.metadata_file, "w", encoding="utf-8") as fp:
                             json.dump(remote_meta, fp, indent=2, ensure_ascii=False)
-                        print(f"[VideoService] Metadata restaurado do HF: {len(remote_meta)} vídeos.")
+                        print(f"[VideoService] Metadata restored from HF: {len(remote_meta)} videos.")
                     except Exception as e:
                         print(f"[VideoService] Erro ao escrever metadata restaurado: {e}")
 
@@ -593,7 +729,7 @@ class VideoService:
                                 folder = data.get("folder", "Geral")
                                 filename = os.path.basename(local_fpath)
                                 repo_path = f"videos/{folder}/{filename}"
-                                logger.info(f"[AutoSync] Enviando vídeo local pendente para o Hugging Face: {filename}")
+                                logger.info(f"[AutoSync] Uploading pending local video to Hugging Face: {filename}")
                                 c_url = cloud_storage.upload_file(local_fpath, repo_path)
                                 if c_url:
                                     meta_cur = self._load_metadata()
@@ -603,7 +739,7 @@ class VideoService:
                                         self._save_metadata(meta_cur)
                                 time.sleep(15)  # Espaçamento seguro entre commits para não estourar taxa
             except Exception as e:
-                logger.warning(f"[AutoSync] Erro na sincronização automática para o HF: {e}")
+                logger.warning(f"[AutoSync] Automatic sync error to HF: {e}")
 
         threading.Thread(target=_auto_sync, daemon=True).start()
 
@@ -656,7 +792,7 @@ class VideoService:
             t = threading.Thread(target=_sync, daemon=True)
             t.start()
         except Exception as e:
-            print(f"[VideoService] Erro ao iniciar sync de metadata para HF: {e}")
+            print(f"[VideoService] Error starting metadata sync to HF: {e}")
 
     def _get_video_id(self, rel_path: str) -> str:
         """Generates a stable deterministic ID from relative path."""
@@ -1539,36 +1675,87 @@ class VideoService:
                         os.makedirs(self.thumbnails_dir, exist_ok=True)
                         cv2.imwrite(thumb_path, resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
                         self._mirror_thumbnail_to_hf(video_id, thumb_path)
-                        return thumb_path
             except Exception as e:
                 logger.warning(f"Error generating OpenCV thumbnail for {video_id}: {e}")
 
+        # 4. Fallback para vídeos na nuvem / remotos (Hugging Face / web stream):
+        cloud_url = (video.get("cloud_url") or video.get("stream_url") or video.get("source_url")) if video else None
+        if cloud_url and str(cloud_url).startswith("http") and "/api/videos/" not in str(cloud_url):
+            cloud_storage._get_api()
+            hf_token = cloud_storage.token or os.getenv("HF_TOKEN")
+
+            # 4a. Tentar baixar do HF se já existir na pasta thumbnails/
+            if cloud_storage.repo_id:
+                remote_hf_thumb = f"https://huggingface.co/datasets/{cloud_storage.repo_id}/resolve/main/thumbnails/{video_id}.jpg"
+                if download_thumbnail_from_url(remote_hf_thumb, thumb_path, referer="https://huggingface.co", token=hf_token):
+                    q = _evaluate_frame_quality(thumb_path)
+                    if q > 38.0:
+                        return thumb_path
+                    else:
+                        try:
+                            os.remove(thumb_path)
+                        except Exception:
+                            pass
+
+            # 4b. Extrair do stream remoto via FFmpeg inteligente (do miolo/ação do vídeo, evitando o começo)
+            dur = float(video.get("duration_seconds") or 0.0)
+            if generate_thumbnail_remote_ffmpeg(str(cloud_url), thumb_path, token=hf_token, duration_sec=dur):
+                self._mirror_thumbnail_to_hf(video_id, thumb_path)
+                return thumb_path
+
         return None
 
-    def auto_heal_all_thumbnails(self):
+    def auto_heal_all_thumbnails(self, background: bool = False):
         """Scans all videos in the library and generates/regenerates thumbnails for any missing one or black/intro screens."""
+        if background:
+            import threading
+            threading.Thread(target=self._run_auto_heal, daemon=True).start()
+            return
+        self._run_auto_heal()
+
+    def _run_auto_heal(self):
+        if getattr(self, "_is_healing", False):
+            logger.info("Auto-heal thumbnails is already in progress, skipping duplicate call.")
+            return
+
+        self._is_healing = True
         try:
             all_vids = self.list_all_videos()
+            missing = []
             for v in all_vids:
                 vid_id = v.get("id")
-                if vid_id:
-                    thumb_path = os.path.join(self.thumbnails_dir, f"{vid_id}.jpg")
-                    needs_healing = False
-                    if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) < 500:
+                if not vid_id:
+                    continue
+                thumb_path = os.path.join(self.thumbnails_dir, f"{vid_id}.jpg")
+                needs_healing = False
+                if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) < 500:
+                    needs_healing = True
+                else:
+                    q = _evaluate_frame_quality(thumb_path)
+                    if q <= 38.0:
                         needs_healing = True
-                    else:
-                        q = _evaluate_frame_quality(thumb_path)
-                        if q <= 38.0:
-                            needs_healing = True
-                    if needs_healing:
-                        if os.path.exists(thumb_path):
-                            try:
-                                os.remove(thumb_path)
-                            except Exception:
-                                pass
-                        self.get_or_generate_thumbnail(vid_id)
+
+                if needs_healing:
+                    if os.path.exists(thumb_path):
+                        try:
+                            os.remove(thumb_path)
+                        except Exception:
+                            pass
+                    missing.append(vid_id)
+
+            if not missing:
+                logger.info("Auto-heal: All videos have verified quality thumbnails.")
+                return
+
+            logger.info(f"Auto-heal: Generating thumbnails for {len(missing)} videos in background...")
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                list(executor.map(self.get_or_generate_thumbnail, missing))
+            logger.info(f"Auto-heal: Successfully processed {len(missing)} videos.")
         except Exception as e:
             logger.warning(f"Error during auto_heal_all_thumbnails: {e}")
+        finally:
+            self._is_healing = False
 
 
 video_service = VideoService()

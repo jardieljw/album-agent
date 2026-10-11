@@ -153,7 +153,6 @@ async def test_chat_api_ollama_success():
 
 @pytest.mark.asyncio
 async def test_ollama_status_http_404_not_ollama():
-    """Verify that a server returning 404 (non-Ollama) is NOT marked as is_available=True."""
     mock_404 = MagicMock(spec=Response)
     mock_404.status_code = 404
     mock_404.text = "Not Found"
@@ -181,12 +180,6 @@ async def test_ollama_status_http_404_not_ollama():
 
 @pytest.mark.asyncio
 async def test_chat_api_gemini_contents_sanitization_first_turn_user(monkeypatch):
-    """
-    Verify that when conversation history starts with an assistant turn (default app greeting)
-    and has consecutive user turns, contents are sanitized so:
-    1. First turn is strictly 'user' (leading 'model' turns dropped)
-    2. Consecutive 'user' turns are merged so roles strictly alternate
-    """
     monkeypatch.setenv("GEMINI_API_KEY", "test-mock-key-12345")
     captured_payloads = []
 
@@ -231,22 +224,17 @@ async def test_chat_api_gemini_contents_sanitization_first_turn_user(monkeypatch
     assert data["reply"] == "Resposta Gemini com contexto limpo."
     assert data["provider"] == "gemini"
 
-    # Verify captured Gemini request structure
     assert len(captured_payloads) == 1
     sent_contents = captured_payloads[0]["contents"]
-    # Rule 1: First turn MUST be 'user' (assistant greeting dropped)
     assert sent_contents[0]["role"] == "user"
-    # Rule 2: Strictly alternating roles (no consecutive 'user' turns)
     for i in range(len(sent_contents) - 1):
         assert sent_contents[i]["role"] != sent_contents[i + 1]["role"]
-    # The consecutive user turns were merged into the single user turn
     assert "Primeira pergunta" in sent_contents[0]["parts"][0]["text"]
     assert "Adicional à primeira" in sent_contents[0]["parts"][0]["text"]
 
 
 @pytest.mark.asyncio
 async def test_chat_api_cross_model_leakage_sanitization(monkeypatch):
-    """Verify that cross-provider model leakage is sanitized safely."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-mock-key-12345")
     mock_gemini_resp = MagicMock(spec=Response)
     mock_gemini_resp.status_code = 200
@@ -269,7 +257,7 @@ async def test_chat_api_cross_model_leakage_sanitization(monkeypatch):
             response = await ac.post("/api/chat", json={
                 "message": "Teste sanitização",
                 "provider": "gemini",
-                "model": "llama3.2"  # Incompatible model leaked to gemini
+                "model": "llama3.2"
             })
     finally:
         AsyncClient.send = original_send

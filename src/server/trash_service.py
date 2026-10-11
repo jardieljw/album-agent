@@ -47,9 +47,9 @@ class TrashService:
                         os.makedirs(os.path.dirname(self.trash_meta_file), exist_ok=True)
                         with open(self.trash_meta_file, "w", encoding="utf-8") as f:
                             json.dump(remote_meta, f, indent=2, ensure_ascii=False)
-                        print(f"[TrashService] Lixeira restaurada do HF: {len(remote_meta)} itens.")
+                        print(f"[TrashService] Trash restored from HF: {len(remote_meta)} items.")
         except Exception as e:
-            print(f"[TrashService] Erro ao restaurar lixeira do HF: {e}")
+            print(f"[TrashService] Error restoring trash from HF: {e}")
 
     def _load_meta(self) -> Dict[str, Any]:
         try:
@@ -78,7 +78,7 @@ class TrashService:
                 t = threading.Thread(target=_sync_trash, daemon=True)
                 t.start()
         except Exception as e:
-            print(f"[TrashService] Erro ao sincronizar lixeira com HF: {e}")
+            print(f"[TrashService] Error syncing trash with HF: {e}")
 
     def list_all_items(self) -> List[Dict[str, Any]]:
         """Returns all items in the trash sorted newest deletion first."""
@@ -138,7 +138,7 @@ class TrashService:
             "id": trash_id,
             "type": "video",
             "title": video_dict.get("title", filename),
-            "original_location": f"Pasta: {video_dict.get('folder', 'Geral')}",
+            "original_location": f"Folder: {video_dict.get('folder', 'General')}",
             "file_size_bytes": video_dict.get("file_size_bytes") or os.path.getsize(dst_path),
             "thumbnail_url": f"/api/videos/{video_id}/thumbnail",
             "stream_url": f"/api/trash/videos/{trash_id}/stream",
@@ -185,7 +185,7 @@ class TrashService:
             "id": trash_id,
             "type": "album",
             "title": album_summary.get("title") or album_summary.get("original_title") or f"Álbum {session_id}",
-            "original_location": f"Galeria de Álbuns ({len(album_summary.get('images', []))} fotos)",
+            "original_location": f"Album Gallery ({len(album_summary.get('images', []))} photos)",
             "file_size_bytes": total_size,
             "thumbnail_url": cover,
             "deleted_at": datetime.now(timezone.utc).isoformat(),
@@ -226,7 +226,7 @@ class TrashService:
                 "id": trash_id,
                 "type": "photo",
                 "title": title,
-                "original_location": f"Álbum: {album_title or session_id}",
+                "original_location": f"Album: {album_title or session_id}",
                 "file_size_bytes": photo.get("file_size") or 0,
                 "thumbnail_url": thumb,
                 "deleted_at": now_iso,
@@ -388,7 +388,7 @@ class TrashService:
                         if deleted_hf:
                             print(f"[TrashService] Arquivo deletado permanentemente do HF: {hf_repo_path}")
             except Exception as e:
-                print(f"[TrashService] Erro ao deletar arquivo do Hugging Face: {e}")
+                print(f"[TrashService] Error deleting file from Hugging Face: {e}")
 
             # 3. Deleta thumbnail em cache se houver
             orig_id = item_meta.get("original_video_id")
@@ -416,7 +416,7 @@ class TrashService:
                     if cloud_storage.is_connected():
                         cloud_storage.delete_file(f"albums/{session_id}.json")
                 except Exception as e:
-                    print(f"[TrashService] Erro ao deletar album do HF: {e}")
+                    print(f"[TrashService] Error deleting album from HF: {e}")
 
         # Remove dos metadados da lixeira
         del meta[trash_id]
@@ -467,7 +467,7 @@ class TrashService:
         return {
             "success": True,
             "items_purged": total_items,
-            "message": "Lixeira esvaziada com sucesso",
+            "message": "Trash emptied successfully",
         }
 
 

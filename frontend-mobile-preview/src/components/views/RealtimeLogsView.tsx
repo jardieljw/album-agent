@@ -5,7 +5,8 @@ import { useAppStore } from '../../store/useAppStore';
 
 export const RealtimeLogsView: React.FC = () => {
   const { logs, clearLogs, settings } = useAppStore();
-  const tLogs = translations[settings.language].realtimeLogs;
+  const isEn = settings?.language === 'en-US';
+  const tLogs: any = translations[settings.language].realtimeLogs || {};
   const [levelFilter, setLevelFilter] = useState<'all' | 'ai' | 'network' | 'dom' | 'warning' | 'error'>('all');
   const [viewMode, setViewMode] = useState<'cli' | 'cards'>('cli');
   const [search, setSearch] = useState('');
@@ -71,7 +72,7 @@ export const RealtimeLogsView: React.FC = () => {
               className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition-colors ${
                 viewMode === 'cli' ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
               }`}
-              title={tLogs.cliModeTitle || "Visualização Console CLI (Windows Stream)"}
+              title={tLogs.cliModeTitle || "Console CLI View (Live Stream)"}
             >
               <Code size={13} />
               <span>Console CLI</span>
@@ -81,10 +82,10 @@ export const RealtimeLogsView: React.FC = () => {
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
                 viewMode === 'cards' ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
               }`}
-              title={tLogs.cardsModeTitle || "Visualização em Cartões Formatados"}
+              title={tLogs.cardsModeTitle || "Formatted Cards View"}
             >
               <LayoutList size={13} />
-              <span>Formatado</span>
+              <span>{tLogs.formatted || "Formatted"}</span>
             </button>
           </div>
 
@@ -94,12 +95,12 @@ export const RealtimeLogsView: React.FC = () => {
             title="Copiar todo o log"
           >
             {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-            <span>{copied ? 'Copiado!' : 'Copiar'}</span>
+            <span>{copied ? (isEn ? 'Copied!' : 'Copiado!') : (isEn ? 'Copy' : 'Copiar')}</span>
           </button>
           <button
             onClick={handleExportLog}
             className="px-3 py-1.5 rounded-xl bg-surface-elevated hover:bg-surface-hover border border-border text-xs font-semibold text-slate-300 flex items-center justify-center gap-1.5 transition-colors shrink-0"
-            title="Exportar arquivo .log"
+            title={isEn ? "Export .log file" : "Exportar arquivo .log"}
           >
             <Download size={13} />
             <span>.log</span>
@@ -107,10 +108,10 @@ export const RealtimeLogsView: React.FC = () => {
           <button
             onClick={clearLogs}
             className="px-3 py-1.5 rounded-xl bg-surface-elevated hover:bg-rose-950/40 border border-border text-xs font-semibold text-rose-400 flex items-center justify-center gap-1.5 transition-colors shrink-0"
-            title="Limpar Terminal (Permanente)"
+            title={isEn ? "Clear Terminal (Permanent)" : "Limpar Terminal (Permanente)"}
           >
             <Trash2 size={13} />
-            <span>Limpar</span>
+            <span>{isEn ? "Clear" : "Limpar"}</span>
           </button>
         </div>
       </div>
@@ -156,8 +157,8 @@ export const RealtimeLogsView: React.FC = () => {
               const isAi = log.level === 'ai' || msg.includes('Hypothesis') || msg.includes('AI') || msg.includes('[AI]');
               const isNet = log.level === 'network' || msg.includes('Navigating') || msg.includes('HTTP');
               const isDom = log.level === 'dom' || msg.includes('DOM') || msg.includes('Discovered');
-              const isSuccess = msg.includes('aprovada') || msg.includes('salvo') || msg.includes('100%') || msg.includes('concluido');
-              const isWarn = log.level === 'warning' || log.level === 'error' || msg.includes('Rejeitado') || msg.includes('falha');
+              const isSuccess = msg.includes('aprovada') || msg.includes('salvo') || msg.includes('100%') || msg.includes('concluido') || msg.includes('success') || msg.includes('completed');
+              const isWarn = log.level === 'warning' || log.level === 'error' || msg.includes('Rejeitado') || msg.includes('falha') || msg.includes('rejected') || msg.includes('failed');
 
               return (
                 <div
@@ -193,9 +194,9 @@ export const RealtimeLogsView: React.FC = () => {
           ) : (
             <div className="my-auto py-12 text-center text-slate-500 font-sans space-y-2">
               <Terminal size={32} className="mx-auto text-slate-600 opacity-60" />
-              <p className="text-xs font-semibold text-slate-400">Terminal em espera. Nenhum log registrado.</p>
+              <p className="text-xs font-semibold text-slate-400">{tLogs.terminalStandby || "Terminal standing by. No logs recorded."}</p>
               <p className="text-[10px] text-slate-600 font-mono">
-                {tLogs.emptyTerminal || 'Dispare uma extração para acompanhar o streaming linha por linha de todos os comandos.'}
+                {tLogs.emptyTerminal || "Trigger an extraction to monitor live streaming commands line-by-line."}
               </p>
             </div>
           )}

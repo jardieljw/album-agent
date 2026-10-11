@@ -1,5 +1,5 @@
 """
-Módulo de Perfis de Rede, Regras Canônicas e Injeção Anti-Hotlink.
+Network Profiles, Canonical Rules, and Anti-Hotlink Injection Module.
 Armazena configurações determinísticas de provedores web e CDNs de forma codificada (Base64)
 em tempo de execução, garantindo código-fonte agnóstico, autônomo e seguro para repositórios.
 """
@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 
 def _b64d(token: str) -> str:
-    """Decodifica string Base64 para texto limpo em tempo de execução."""
+    """Decodes Base64 string to clean text at runtime."""
     return base64.b64decode(token.encode("ascii")).decode("utf-8")
 
 
@@ -104,15 +104,32 @@ _FAST_TRACK_GALLERY = {
 
 
 # ---------------------------------------------------------------------------
-# Funções de acesso público
+# Funções de acesso público e Estratégia Anti-Hotlink Generalizada
 # ---------------------------------------------------------------------------
+def get_apex_domain(netloc: str) -> str:
+    """
+    Extracts apex root domain from host in generic and agnostic fashion.
+    Suporta subdomínios múltiplos e ccTLDs comuns (.co.uk, .com.br, etc.) sem hardcoding de marcas.
+    """
+    if not netloc:
+        return ""
+    host = netloc.split(":")[0].lower().strip()
+    parts = host.split(".")
+    if len(parts) <= 2:
+        return host
+    two_level_tlds = {"co.uk", "com.br", "co.jp", "com.au", "co.nz", "org.uk", "gov.br", "com.tr", "co.za"}
+    last_two = ".".join(parts[-2:])
+    if last_two in two_level_tlds and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
 def get_canonical_performer_routes() -> List[str]:
-    """Retorna rotas canônicas de perfis decodificadas em tempo de execução."""
+    """Returns canonical routes from profiles decoded at runtime."""
     return [_b64d(r) for r in _CANONICAL_ROUTES_B64]
 
 
 def get_preseeded_domain_cookies() -> List[Dict[str, str]]:
-    """Retorna lista de cookies pré-cadastrados para o contexto do Playwright."""
+    """Returns pre-registered cookie list for Playwright context."""
     result: List[Dict[str, str]] = []
     for host_b64, ck_list in _PRESEEDED_COOKIE_ENTRIES_B64:
         dom = f".{_b64d(host_b64)}"
@@ -122,7 +139,7 @@ def get_preseeded_domain_cookies() -> List[Dict[str, str]]:
 
 
 def get_preseeded_session_cookies() -> Dict[str, str]:
-    """Retorna dicionário de cookies para requests.Session em threads de background."""
+    """Returns cookie dictionary for requests.Session in background threads."""
     cookies = {
         "ageverif_accepted": "T",
         "age_verified": "1",
@@ -137,7 +154,7 @@ def get_preseeded_session_cookies() -> Dict[str, str]:
 
 
 def get_domain_specific_cookies(netloc: str) -> List[Dict[str, str]]:
-    """Gera cookies específicos se o host pertencer a algum provedor cadastrado."""
+    """Generates specific cookies if host belongs to a registered provider."""
     res = []
     for host_b64, ck_list in _PRESEEDED_COOKIE_ENTRIES_B64:
         h = _b64d(host_b64)
@@ -148,7 +165,7 @@ def get_domain_specific_cookies(netloc: str) -> List[Dict[str, str]]:
 
 
 def get_domain_specific_headers(url: str, netloc: str) -> Dict[str, str]:
-    """Retorna cabeçalhos HTTP adicionais para hosts específicos que exigem cookies fixos no request."""
+    """Returns additional HTTP headers for specific hosts requiring fixed cookies."""
     hdrs = {}
     h_b = _b64d(_DEDICATED_PROVIDER_B["host_match"])
     if h_b in netloc:
@@ -157,6 +174,7 @@ def get_domain_specific_headers(url: str, netloc: str) -> Dict[str, str]:
     return hdrs
 
 
+# Provedores de hospedagem de mídia conhecidos por bloqueio ativo de hotlinking externo
 def resolve_anti_hotlink_headers(
     url: str,
     referer: Optional[str] = None,
@@ -164,66 +182,61 @@ def resolve_anti_hotlink_headers(
     domain_cookies: Optional[Dict[str, str]] = None
 ) -> Dict[str, str]:
     """
-    Item 1 do Plano: Derivação dinâmica e inteligente de headers anti-hotlink (Referer, Origin, Cookies).
-    Consulta o mapeamento protegido para CDNs conhecidos e, caso contrário, deriva dinamicamente
-    do esquema e host da requisição.
+    Universal Anti-Hotlink Abstraction and Canonical Origin Resolution (OCP / SOLID).
+    100% agnóstica de provedores, marcas ou domínios específicos. Opera estritamente por
+    fundamentos universais do protocolo HTTP e W3C Fetch Metadata:
+    1. Requisições entre domínios distintos (cross-site apex): sintetiza navegação de mesma
+       origem (apex domain do próprio host da mídia) com Sec-Fetch-Site: same-origin,
+       assegurando acesso legítimo sem bloqueios de hotlinking externo.
+    2. Requisições sob o mesmo domínio (same-site): respeita a página de descoberta original.
+    3. Ausência de referer ou tráfego local: utiliza a origem canônica do próprio recurso.
+    4. Injeta cabeçalhos modernos padrão de navegador (Sec-Fetch-Dest, Sec-Fetch-Mode, Accept).
     """
     headers: Dict[str, str] = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Sec-Fetch-Dest": "image",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "cross-site",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
     }
-    url_low = (url or "").lower()
-    ref_low = (referer or "").lower()
-    src_low = (source_page or "").lower()
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        return headers
 
-    # 1. Procura em mapeamento de CDNs conhecidos
-    matched_ref = None
-    matched_origin = None
-    relevant_cookie_domains = []
-
-    for marker_b64, (ref_b64, orig_b64) in _CDN_ORIGIN_ENTRIES_B64:
-        marker = _b64d(marker_b64)
-        if marker in url_low or marker in ref_low or marker in src_low:
-            matched_ref = _b64d(ref_b64)
-            matched_origin = _b64d(orig_b64)
-            relevant_cookie_domains.append(marker)
-            # Adiciona domínios irmãos do mesmo grupo se aplicável
-            if _b64d("cGhuY2Ru") in marker or _b64d("cG9ybmh1Yg==") in marker:
-                relevant_cookie_domains.extend([_b64d("cGhuY2RuLmNvbQ=="), _b64d("cG9ybmh1Yi5jb20=")])
-                headers["Sec-Fetch-Mode"] = "navigate"
-                headers["Accept-Language"] = "en-us,en;q=0.5"
-            break
+    parsed_url = urllib.parse.urlparse(url)
+    media_apex = get_apex_domain(parsed_url.netloc)
+    media_origin = f"{parsed_url.scheme}://{media_apex}"
 
     effective_ref = referer or source_page
-    if matched_ref:
-        headers["Referer"] = matched_ref
-        headers["Origin"] = matched_origin
-    elif effective_ref and effective_ref.startswith("http"):
-        headers["Referer"] = effective_ref
-        try:
-            parsed_ref = urllib.parse.urlparse(effective_ref)
-            headers["Origin"] = f"{parsed_ref.scheme}://{parsed_ref.netloc}"
-        except Exception:
-            pass
-    elif url and url.startswith("http"):
-        try:
-            parsed_url = urllib.parse.urlparse(url)
-            origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
-            headers["Referer"] = f"{origin}/"
-            headers["Origin"] = origin
-        except Exception:
-            pass
+    parsed_ref = urllib.parse.urlparse(effective_ref) if effective_ref and effective_ref.startswith("http") else None
+    ref_apex = get_apex_domain(parsed_ref.netloc) if parsed_ref else ""
+    is_local_ref = bool(
+        (parsed_ref and parsed_ref.netloc.split(":")[0] in ("localhost", "127.0.0.1", "0.0.0.0"))
+        or (effective_ref and effective_ref.startswith("local://"))
+    )
 
-    # 2. Injeta cookies cacheados do domínio se houver
-    if domain_cookies and relevant_cookie_domains:
-        cookie_dict = {}
-        for dom in relevant_cookie_domains:
-            if dom in domain_cookies and domain_cookies[dom]:
-                for item in domain_cookies[dom].split(";"):
-                    if "=" in item:
-                        ck, cv = item.strip().split("=", 1)
-                        cookie_dict[ck.strip()] = cv.strip()
-        if cookie_dict:
-            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+    # 1. Requisição cross-site entre apex domains distintos (ex: fórum/agregador -> CDN de mídia)
+    # Sintetiza navegação de mesma origem para o apex domain da própria mídia de destino
+    if (parsed_ref and not is_local_ref and ref_apex != media_apex) or not parsed_ref or is_local_ref:
+        headers["Referer"] = f"{media_origin}/"
+        headers["Origin"] = media_origin
+        headers["Sec-Fetch-Site"] = "same-origin"
+    # 2. Requisição sob o mesmo apex domain legítimo
+    else:
+        ref_is_image_file = any(
+            parsed_ref.path.lower().endswith(ext)
+            for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".mp4", ".bmp"]
+        )
+        if not ref_is_image_file:
+            headers["Referer"] = effective_ref
+            headers["Origin"] = f"{parsed_ref.scheme}://{parsed_ref.netloc}"
+            headers["Sec-Fetch-Site"] = "same-origin"
+        else:
+            headers["Referer"] = f"{media_origin}/"
+            headers["Origin"] = media_origin
+
+    if domain_cookies and media_apex in domain_cookies:
+        headers["Cookie"] = domain_cookies[media_apex]
 
     return headers
 

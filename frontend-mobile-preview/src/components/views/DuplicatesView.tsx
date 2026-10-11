@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Copy, Trash2, CheckCircle2, ShieldCheck, AlertCircle, RefreshCw, ExternalLink } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { ImageItem } from '../../types';
@@ -22,6 +22,7 @@ export const DuplicatesView: React.FC = () => {
   const { albums, removeImagesFromAlbum, addNotification, openLightbox, settings } = useAppStore();
   const [filterQuery, setFilterQuery] = useState('');
   const t = translations[settings.language].duplicates;
+  const isEn = settings.language === 'en-US';
 
   // Real Duplicate Detection Algorithm
   const clusters: DuplicateCluster[] = useMemo(() => {
@@ -126,6 +127,18 @@ export const DuplicatesView: React.FC = () => {
     );
   }, [clusters, filterQuery]);
 
+  // Carregamento progressivo (Buffer Inteligente): exibe inicialmente 16 grupos
+  // e expande sob demanda ao rolar a página, evitando sobrecarga de rede e memória
+  const [visibleClusterCount, setVisibleClusterCount] = useState(16);
+
+  useEffect(() => {
+    setVisibleClusterCount(16);
+  }, [filterQuery, clusters.length]);
+
+  const displayedClusters = useMemo(() => {
+    return filteredClusters.slice(0, visibleClusterCount);
+  }, [filteredClusters, visibleClusterCount]);
+
   const totalRedundantCount = clusters.reduce((acc, c) => acc + c.redundantItems.length, 0);
   const totalWastedBytes = clusters.reduce(
     (acc, c) => acc + c.redundantItems.reduce((sum, r) => sum + (r.image.fileSizeBytes || 0), 0),
@@ -224,7 +237,7 @@ export const DuplicatesView: React.FC = () => {
       {/* Clusters List */}
       {filteredClusters.length > 0 ? (
         <div className="space-y-4">
-          {filteredClusters.map((cluster) => {
+          {displayedClusters.map((cluster) => {
             const best = cluster.bestItem;
             return (
               <div key={cluster.id} className="glass-panel p-4 sm:p-5 rounded-3xl border border-border space-y-3">
@@ -234,7 +247,7 @@ export const DuplicatesView: React.FC = () => {
                       {cluster.matchReason}
                     </span>
                     <span className="font-semibold text-slate-200 truncate max-w-[200px] sm:max-w-md">
-                      {(t.albumLabel || 'Álbum: ') + best.albumTitle}
+                      {(t.albumLabel || (isEn ? "Album: " : "Álbum: ")) + best.albumTitle}
                     </span>
                   </div>
                   <span className="text-slate-400 font-mono text-[11px]">
@@ -245,12 +258,22 @@ export const DuplicatesView: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                   {/* Best Item (Keep) */}
                   <div className="p-3 rounded-2xl bg-emerald-950/20 border-2 border-emerald-500 shadow-glow-emerald flex flex-col justify-between">
-                    <div className="relative group cursor-pointer" onClick={() => openLightbox(best.image)}>
+                    <div className="relative group cursor-pointer" onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      openLightbox(best.image, undefined, {
+                        x: Math.round(rect.left),
+                        y: Math.round(rect.top),
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height),
+                      });
+                    }}>
                       <img
                         src={best.image.thumbnailUrl || best.image.originalUrl}
                         alt={best.image.title}
-                        className="w-full h-40 object-cover rounded-xl mb-2"
+                        className="w-full h-40 object-cover rounded-xl mb-2 bg-slate-950"
                         loading="lazy"
+                        decoding="async"
+                        referrerPolicy="no-referrer"
                       />
                       <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-emerald-500 text-black font-mono font-bold text-[9px]">
                         {t.keepBadge || 'MANTER'}
@@ -259,7 +282,7 @@ export const DuplicatesView: React.FC = () => {
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-xs text-emerald-400 truncate max-w-[130px]">
-                          {t.bestResolution || 'Melhor Resolução'}
+                          {t.bestResolution || (isEn ? "Best Resolution" : "Melhor Resolução")}
                         </span>
                         <CheckCircle2 size={14} className="text-emerald-400" />
                       </div>
@@ -276,12 +299,22 @@ export const DuplicatesView: React.FC = () => {
                       key={redundant.image.id}
                       className="p-3 rounded-2xl bg-surface-elevated/40 border border-border flex flex-col justify-between opacity-85 hover:opacity-100 transition-opacity"
                     >
-                      <div className="relative group cursor-pointer" onClick={() => openLightbox(redundant.image)}>
+                      <div className="relative group cursor-pointer" onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        openLightbox(redundant.image, undefined, {
+                          x: Math.round(rect.left),
+                          y: Math.round(rect.top),
+                          width: Math.round(rect.width),
+                          height: Math.round(rect.height),
+                        });
+                      }}>
                         <img
                           src={redundant.image.thumbnailUrl || redundant.image.originalUrl}
                           alt={redundant.image.title}
-                          className="w-full h-40 object-cover rounded-xl mb-2"
+                          className="w-full h-40 object-cover rounded-xl mb-2 bg-slate-950"
                           loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
                         />
                         <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-rose-500/80 text-white font-mono font-bold text-[9px]">
                           {t.duplicateBadge || 'DUPLICATA'}
@@ -314,6 +347,32 @@ export const DuplicatesView: React.FC = () => {
               </div>
             );
           })}
+
+          {/* Sentinela de Rolagem Suave sob Demanda */}
+          {visibleClusterCount < filteredClusters.length && (
+            <div
+              ref={(el) => {
+                if (!el) return;
+                const observer = new IntersectionObserver(
+                  (entries) => {
+                    if (entries[0].isIntersecting) {
+                      setVisibleClusterCount((prev) => Math.min(prev + 16, filteredClusters.length));
+                    }
+                  },
+                  { rootMargin: '600px' }
+                );
+                observer.observe(el);
+              }}
+              className="py-8 flex flex-col items-center justify-center gap-2 select-none"
+            >
+              <div className="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+              <span className="text-xs text-slate-400 font-mono">
+                {isEn
+                  ? `Loading more duplicate groups (${displayedClusters.length} of ${filteredClusters.length})...`
+                  : `Carregando mais grupos de duplicatas (${displayedClusters.length} de ${filteredClusters.length})...`}
+              </span>
+            </div>
+          )}
         </div>
       ) : (
         <div className="p-12 glass-panel rounded-3xl border border-border text-center space-y-3">

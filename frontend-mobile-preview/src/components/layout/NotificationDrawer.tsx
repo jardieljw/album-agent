@@ -2,6 +2,11 @@ import React, { useEffect } from 'react';
 import { X, CheckCheck, Bell, Sparkles, AlertTriangle, Info, CheckCircle2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../i18n/translations';
+import {
+  getDrawerAnimationClass,
+  getSpeedClass,
+  getDistanceClass
+} from '../../services/motionConfig';
 
 export const NotificationDrawer: React.FC = () => {
   const {
@@ -35,7 +40,7 @@ export const NotificationDrawer: React.FC = () => {
       ></div>
 
       {/* Drawer Content */}
-      <div className="relative w-full max-w-sm h-full bg-surface border-l border-border shadow-2xl flex flex-col z-10 animate-slide-left">
+      <div className={`relative w-full max-w-sm h-full bg-surface border-l border-border shadow-2xl flex flex-col z-10 ${getDrawerAnimationClass(settings.drawerAnimation || 'slide', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}>
         <div className="p-4 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bell size={18} className="text-brand-400" />

@@ -2,7 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { X, FolderPlus, Edit3, ArrowRight, Folder } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { translations } from '../../i18n/translations';
+import {
+  getModalAnimationClass,
+  getSpeedClass,
+  getDistanceClass
+} from '../../services/motionConfig';
 import { IconBadge } from './IconBadge';
+import { ModalPortal } from './ModalPortal';
 
 export const FolderModal: React.FC = () => {
   const {
@@ -15,6 +21,7 @@ export const FolderModal: React.FC = () => {
     batchMoveVideos,
     settings
   } = useAppStore();
+  const isEn = settings?.language === 'en-US';
 
   const t = translations[settings.language]?.folderModal || translations['en-US'].folderModal;
 
@@ -77,12 +84,12 @@ export const FolderModal: React.FC = () => {
   };
 
   const getTitle = () => {
-    if (activeFolderModal.type === 'create') return t.createTitle || 'Criar Nova Pasta de Vídeos';
+    if (activeFolderModal.type === 'create') return t.createTitle || (isEn ? 'Create New Video Folder' : 'Criar Nova Pasta de Vídeos');
     if (activeFolderModal.type === 'rename') return (t.renameTitle || 'Renomear Pasta "{folder}"').replace('{folder}', activeFolderModal.folderName || '');
     if (activeFolderModal.videoIds && activeFolderModal.videoIds.length > 1) {
-      return (t.moveBatchTitle || 'Mover {count} Vídeos Selecionados').replace('{count}', String(activeFolderModal.videoIds.length));
+      return (t.moveBatchTitle || (isEn ? 'Move {count} Selected Videos' : 'Mover {count} Vídeos Selecionados')).replace('{count}', String(activeFolderModal.videoIds.length));
     }
-    return t.moveSingleTitle || 'Mover Vídeo para Outra Pasta';
+    return t.moveSingleTitle || (isEn ? 'Move Video to Another Folder' : 'Mover Vídeo para Outra Pasta');
   };
 
   const getBadge = () => {
@@ -96,13 +103,14 @@ export const FolderModal: React.FC = () => {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) setActiveFolderModal(null);
-      }}
-    >
-      <div className="bg-slate-900 border border-border rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl relative">
+    <ModalPortal>
+      <div
+        className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setActiveFolderModal(null);
+        }}
+      >
+      <div className={`bg-slate-900 border border-border rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl relative ${getModalAnimationClass(settings.modalAnimation || 'scale', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}>
         <button
           onClick={() => setActiveFolderModal(null)}
           className="absolute top-4 right-4 p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
@@ -141,7 +149,7 @@ export const FolderModal: React.FC = () => {
                       <span>{f.name}</span>
                     </div>
                     <span className="text-[10px] font-mono text-slate-400">
-                      {(t.videosCount || '{count} vídeos').replace('{count}', String(f.videoCount || 0))}
+                      {(t.videosCount || (isEn ? '{count} videos' : '{count} vídeos')).replace('{count}', String(f.videoCount || 0))}
                     </span>
                   </button>
                 ))}
@@ -176,11 +184,12 @@ export const FolderModal: React.FC = () => {
               disabled={isSubmitting || (activeFolderModal.type !== 'move' && !inputVal.trim())}
               className="px-5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-glow-brand"
             >
-              {isSubmitting ? (t.processing || 'Processando...') : activeFolderModal.type === 'move' ? (t.moveVideo || 'Mover Vídeo') : (t.saveFolder || 'Salvar Pasta')}
+              {isSubmitting ? (t.processing || (isEn ? 'Processing...' : 'Processando...')) : activeFolderModal.type === 'move' ? (t.moveVideo || (isEn ? 'Move Video' : 'Mover Vídeo')) : (t.saveFolder || (isEn ? 'Save Folder' : 'Salvar Pasta'))}
             </button>
           </div>
         </form>
       </div>
     </div>
-  );
+  </ModalPortal>
+);
 };

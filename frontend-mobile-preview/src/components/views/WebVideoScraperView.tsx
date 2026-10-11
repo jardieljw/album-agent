@@ -30,6 +30,7 @@ import { SavedRedirectBadge } from '../common/SavedRedirectBadge';
 import { getProxiedStreamUrl } from './AlbumDetailView';
 import { translations } from '../../i18n/translations';
 import { IconBadge } from '../common/IconBadge';
+import { ModalPortal } from '../common/ModalPortal';
 
 export const WebVideoScraperView: React.FC = () => {
   const {
@@ -48,6 +49,7 @@ export const WebVideoScraperView: React.FC = () => {
   } = useAppStore();
 
   const t = translations[settings.language].webVideoScraper || translations['en-US'].webVideoScraper;
+  const isEn = settings.language === 'en-US';
 
   const { url, scanResult, selectedIds, targetFolder, errorMsg } = webScraperState;
   const activeTab = webScraperState.activeTab || 'main';
@@ -155,11 +157,11 @@ export const WebVideoScraperView: React.FC = () => {
         });
         soundEffects.success(settings.soundEnabled);
       } else {
-        setWebScraperState({ errorMsg: res.error || 'Nenhum vídeo encontrado nesta página.' });
+        setWebScraperState({ errorMsg: res.error || (isEn ? "No videos found on this page." : "Nenhum vídeo encontrado nesta página.") });
         soundEffects.trash(settings.soundEnabled);
       }
     } catch (err: any) {
-      setWebScraperState({ errorMsg: err.message || 'Falha ao escanear página.' });
+      setWebScraperState({ errorMsg: err.message || (isEn ? "Failed to scan page." : "Falha ao escanear página.") });
       soundEffects.trash(settings.soundEnabled);
     } finally {
       setIsScanning(false);
@@ -450,7 +452,7 @@ export const WebVideoScraperView: React.FC = () => {
               value={limit === '' ? '' : limit}
               onChange={e => setLimit(e.target.value === '' ? '' : Number(e.target.value))}
               placeholder={t.limitPlaceholder || 'Todos (sem limite)'}
-              title={t.limitTitle || 'Deixe vazio para buscar todos os vídeos da página'}
+              title={t.limitTitle || (isEn ? "Leave empty to fetch all videos from page" : "Deixe vazio para buscar todos os vídeos da página")}
               className="w-full h-12 bg-surface-elevated border border-border focus:border-violet-500 text-slate-100 text-xs sm:text-sm rounded-2xl px-3 outline-none transition-colors shadow-inner text-center font-medium"
             />
           </div>
@@ -845,74 +847,76 @@ export const WebVideoScraperView: React.FC = () => {
 
       {/* Duplicate Videos Warning / Confirmation Modal */}
       {showDuplicateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-lg glass-panel-elevated border border-emerald-500/40 rounded-3xl p-6 shadow-2xl space-y-5 animate-scale-up">
-            <div className="flex items-start gap-4">
-              <IconBadge variant="emerald" size="lg" icon={<CheckCircle2 size={24} />} />
-              <div className="space-y-1">
-                <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
-                  {t.duplicateModalTitle}
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  <span className="font-bold text-emerald-400">{duplicateVideosList.length}</span> {t.ofCount || 'dos'} {duplicateVideosList.length + onlyNewVideosList.length} {t.duplicateModalSubtitle}
-                </p>
+        <ModalPortal>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+            <div className="w-full max-w-lg glass-panel-elevated border border-emerald-500/40 rounded-3xl p-6 shadow-2xl space-y-5 animate-scale-up">
+              <div className="flex items-start gap-4">
+                <IconBadge variant="emerald" size="lg" icon={<CheckCircle2 size={24} />} />
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                    {t.duplicateModalTitle}
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    <span className="font-bold text-emerald-400">{duplicateVideosList.length}</span> {t.ofCount || 'dos'} {duplicateVideosList.length + onlyNewVideosList.length} {t.duplicateModalSubtitle}
+                  </p>
+                </div>
+              </div>
+
+              {/* List of duplicate titles */}
+              <div className="max-h-48 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                {duplicateVideosList.map((d, i) => (
+                  <div key={d.id || i} className="p-2.5 rounded-xl bg-surface-elevated border border-border flex items-center justify-between gap-3 text-xs">
+                    <span className="text-slate-200 font-medium truncate flex-1" title={d.title}>
+                      {d.title}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold shrink-0">
+                      {d.saved_folder || t.defaultFolder || 'Galeria'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-3 rounded-2xl bg-violet-950/40 border border-violet-500/30 text-xs text-violet-200 flex items-center gap-2">
+                <Sparkles size={14} className="text-violet-400 shrink-0" />
+                <span>
+                  {onlyNewVideosList.length > 0 
+                    ? t.skipDuplicateModalDesc.replace('{count}', String(onlyNewVideosList.length))
+                    : t.duplicateModalAllSavedHint}
+                </span>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex flex-col sm:flex-row items-center justify-end gap-2.5 pt-2">
+                <button
+                  onClick={() => setShowDuplicateModal(false)}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-surface hover:bg-surface-hover text-slate-400 hover:text-slate-200 border border-border text-xs font-semibold transition-colors"
+                >
+                  {t.cancel}
+                </button>
+
+                {onlyNewVideosList.length > 0 && (
+                  <button
+                    onClick={() => executeBatchSave(onlyNewVideosList, true)}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition-all"
+                  >
+                    <Check size={14} />
+                    <span>
+                      {t.skipSavedAndDownloadCount.replace('{count}', String(onlyNewVideosList.length))}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => executeBatchSave([...duplicateVideosList, ...onlyNewVideosList], false)}
+                  className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-surface-elevated hover:bg-surface-hover text-slate-300 text-xs font-semibold border border-border transition-colors"
+                  title={t.forceNewDownload}
+                >
+                  {t.downloadAllAnywayCount.replace('{count}', String(duplicateVideosList.length + onlyNewVideosList.length))}
+                </button>
               </div>
             </div>
-
-            {/* List of duplicate titles */}
-            <div className="max-h-48 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-              {duplicateVideosList.map((d, i) => (
-                <div key={d.id || i} className="p-2.5 rounded-xl bg-surface-elevated border border-border flex items-center justify-between gap-3 text-xs">
-                  <span className="text-slate-200 font-medium truncate flex-1" title={d.title}>
-                    {d.title}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold shrink-0">
-                    {d.saved_folder || t.defaultFolder || 'Galeria'}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div className="p-3 rounded-2xl bg-violet-950/40 border border-violet-500/30 text-xs text-violet-200 flex items-center gap-2">
-              <Sparkles size={14} className="text-violet-400 shrink-0" />
-              <span>
-                {onlyNewVideosList.length > 0 
-                  ? t.skipDuplicateModalDesc.replace('{count}', String(onlyNewVideosList.length))
-                  : t.duplicateModalAllSavedHint}
-              </span>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="flex flex-col sm:flex-row items-center justify-end gap-2.5 pt-2">
-              <button
-                onClick={() => setShowDuplicateModal(false)}
-                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-surface hover:bg-surface-hover text-slate-400 hover:text-slate-200 border border-border text-xs font-semibold transition-colors"
-              >
-                {t.cancel}
-              </button>
-
-              {onlyNewVideosList.length > 0 && (
-                <button
-                  onClick={() => executeBatchSave(onlyNewVideosList, true)}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition-all"
-                >
-                  <Check size={14} />
-                  <span>
-                    {t.skipSavedAndDownloadCount.replace('{count}', String(onlyNewVideosList.length))}
-                  </span>
-                </button>
-              )}
-
-              <button
-                onClick={() => executeBatchSave([...duplicateVideosList, ...onlyNewVideosList], false)}
-                className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-surface-elevated hover:bg-surface-hover text-slate-300 text-xs font-semibold border border-border transition-colors"
-                title={t.forceNewDownload}
-              >
-                {t.downloadAllAnywayCount.replace('{count}', String(duplicateVideosList.length + onlyNewVideosList.length))}
-              </button>
-            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Folder Select Modal */}

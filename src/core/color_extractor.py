@@ -9,6 +9,8 @@ import os
 from typing import List, Tuple, Optional
 from PIL import Image
 
+PALETTE_ENGINE_VERSION = "2.0_spatial_8zone"
+
 
 def rgb_to_hex(r: int, g: int, b: int) -> str:
     """Converts RGB integers (0-255) to lowercase #rrggbb string."""

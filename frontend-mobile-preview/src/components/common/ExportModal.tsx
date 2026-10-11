@@ -13,9 +13,16 @@ import {
   Archive
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
+import { backendApi } from '../../services/realApi';
+import {
+  getModalAnimationClass,
+  getSpeedClass,
+  getDistanceClass
+} from '../../services/motionConfig';
 
 export const ExportModal: React.FC = () => {
-  const { exportModalOpen, exportModalAlbum, closeExportModal } = useAppStore();
+  const { exportModalOpen, exportModalAlbum, closeExportModal, addNotification, settings } = useAppStore();
+  const isEn = settings.language === "en-US";
   const [namingPattern, setNamingPattern] = useState('{album}_{index}_{res}');
   const [removeExif, setRemoveExif] = useState(false);
   const [exportFormat, setExportFormat] = useState<'zip' | 'json' | 'csv' | 'markdown'>('zip');
@@ -41,7 +48,26 @@ export const ExportModal: React.FC = () => {
       if (removeExif) params.append('remove_exif', 'true');
       if (namingPattern && namingPattern.trim()) params.append('naming_pattern', namingPattern.trim());
       const queryStr = params.toString() ? `?${params.toString()}` : '';
-      window.location.href = `/api/albums/${exportModalAlbum.id}/download-zip${queryStr}`;
+      const zipUrl = `/api/albums/${exportModalAlbum.id}/download-zip${queryStr}`;
+      const zipName = `${exportModalAlbum.title || 'album'}.zip`;
+
+      addNotification({
+        type: 'info',
+        title: isEn ? 'Generating ZIP Package' : 'Gerando Pacote ZIP',
+        message: isEn ? `Compressing and preparing "${zipName}" for download...` : `Compactando e preparando "${zipName}" para download...`
+      });
+
+      backendApi.downloadToDisk(zipUrl, zipName, true).then(res => {
+        if (res.success) {
+          addNotification({
+            type: 'success',
+            title: isEn ? 'ZIP Saved Successfully' : 'ZIP Salvo com Sucesso',
+            message: isEn ? `Package saved to Downloads folder: "${res.filename || zipName}".` : `Pacote salvo na pasta Downloads: "${res.filename || zipName}".`
+          });
+        } else {
+          window.location.href = zipUrl;
+        }
+      });
     } else if (exportFormat === 'markdown') {
       const w = window.open('', '_blank');
       if (w) {
@@ -87,7 +113,7 @@ export const ExportModal: React.FC = () => {
     >
       <div
         onClick={e => e.stopPropagation()}
-        className="bg-surface border border-border shadow-2xl rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col"
+        className={`bg-surface border border-border shadow-2xl rounded-2xl w-full max-w-2xl overflow-hidden flex flex-col ${getModalAnimationClass(settings.modalAnimation || 'scale', settings.disableAllAnimations)} ${getSpeedClass(settings.animationSpeed || 'normal')} ${getDistanceClass(settings.animationDistance || 'normal')}`}
       >
         <div className="p-4 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -95,8 +121,8 @@ export const ExportModal: React.FC = () => {
               <Archive size={18} />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-slate-100">Central de Exportação & Empacotamento</h3>
-              <p className="text-[11px] text-slate-400">Exporte os ativos Original em pacotes estruturados ou gere metadados</p>
+              <h3 className="font-bold text-sm text-slate-100">{isEn ? "Export & Packaging Center" : "Central de Exportação & Empacotamento"}</h3>
+              <p className="text-[11px] text-slate-400">{isEn ? "Export Original assets in structured packages or generate metadata" : "Exporte os ativos Original em pacotes estruturados ou gere metadados"}</p>
             </div>
           </div>
           <button onClick={closeExportModal} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200">
@@ -108,7 +134,7 @@ export const ExportModal: React.FC = () => {
           {/* Format Picker */}
           <div>
             <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
-              Formato de Saída
+              {isEn ? "Output Format" : "Formato de Saída"}
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <button
@@ -120,7 +146,7 @@ export const ExportModal: React.FC = () => {
                 }`}
               >
                 <Archive size={20} className={exportFormat === 'zip' ? 'text-brand-400' : ''} />
-                <span className="font-bold">Pacote ZIP Original</span>
+                <span className="font-bold">{isEn ? "Original ZIP Package" : "Pacote ZIP Original"}</span>
               </button>
 
               <button
@@ -144,7 +170,7 @@ export const ExportModal: React.FC = () => {
                 }`}
               >
                 <FileSpreadsheet size={20} className={exportFormat === 'csv' ? 'text-brand-400' : ''} />
-                <span className="font-bold">Planilha CSV</span>
+                <span className="font-bold">{isEn ? "CSV Spreadsheet" : "Planilha CSV"}</span>
               </button>
 
               <button
@@ -165,7 +191,7 @@ export const ExportModal: React.FC = () => {
           {exportFormat === 'zip' && (
             <div>
               <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                Template de Nomenclatura dos Arquivos
+                {isEn ? "File Naming Pattern Template" : "Template de Nomenclatura dos Arquivos"}
               </label>
               <input
                 type="text"
@@ -174,7 +200,7 @@ export const ExportModal: React.FC = () => {
                 className="w-full px-3.5 py-2 rounded-xl bg-surface-elevated border border-border text-slate-200 font-mono text-xs outline-none focus:border-brand-500"
               />
               <p className="text-[10px] text-slate-500 mt-1">
-                Variáveis disponíveis: <code className="text-brand-400">{'{album}'}</code>, <code className="text-brand-400">{'{index}'}</code>, <code className="text-brand-400">{'{res}'}</code>, <code className="text-brand-400">{'{date}'}</code>
+                {isEn ? "Available variables:" : "Variáveis disponíveis:"} <code className="text-brand-400">{'{album}'}</code>, <code className="text-brand-400">{'{index}'}</code>, <code className="text-brand-400">{'{res}'}</code>, <code className="text-brand-400">{'{date}'}</code>
               </p>
             </div>
           )}
@@ -190,7 +216,7 @@ export const ExportModal: React.FC = () => {
               />
               <span className="flex items-center gap-1.5">
                 <Shield size={14} className="text-emerald-400" />
-                Anonimizar EXIF (Expurgar GPS, número de série da câmera e autor)
+                {isEn ? "Anonymize EXIF (Strip GPS, camera serial number, and author)" : "Anonimizar EXIF (Expurgar GPS, número de série da câmera e autor)"}
               </span>
             </label>
           </div>
@@ -201,14 +227,14 @@ export const ExportModal: React.FC = () => {
               onClick={closeExportModal}
               className="px-4 py-2 rounded-xl bg-surface-elevated hover:bg-surface-hover text-slate-300 font-semibold"
             >
-              Cancelar
+              {isEn ? "Cancel" : "Cancelar"}
             </button>
             <button
               onClick={handleExport}
               className="px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-bold flex items-center gap-2 transition-colors shadow-glow-brand"
             >
               {exported ? <Check size={16} /> : <Download size={16} />}
-              <span>{exported ? 'Gerando Pacote...' : 'Gerar e Baixar Arquivo'}</span>
+              <span>{isEn ? (exported ? 'Generating Package...' : 'Generate & Download File') : (exported ? 'Gerando Pacote...' : 'Gerar e Baixar Arquivo')}</span>
             </button>
           </div>
         </div>

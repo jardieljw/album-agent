@@ -14,11 +14,20 @@ from src.core.network_profiles import resolve_anti_hotlink_headers, is_tls_imper
 
 logger = logging.getLogger("safe_downloader")
 
-def _sanitize_filename(name: str) -> str:
+def _sanitize_filename(name: str, default_ext: str = "") -> str:
     import re
-    clean = re.sub(r'[\\/*?:"<>|]', "", name)
-    clean = re.sub(r'\s+', "_", clean).strip("_")
-    return clean[:60] or "album"
+    if not name:
+        return f"album{default_ext}" if default_ext else "album"
+    base, ext = os.path.splitext(name)
+    if not ext and default_ext:
+        ext = default_ext
+    clean_base = re.sub(r'[\/*?:"<>|]', "", base)
+    clean_base = re.sub(r'\s+', "_", clean_base).strip("._ ")
+    clean_base = clean_base[:80] or "album"
+    clean_ext = re.sub(r'[\/*?:"<>|\s]', "", ext).lower()
+    if clean_ext and not clean_ext.startswith("."):
+        clean_ext = f".{clean_ext}"
+    return f"{clean_base}{clean_ext}"
 
 def _format_image_filename(pattern: Optional[str], a_name: str, idx: int, img: Any, ext: str) -> str:
     if pattern and pattern.strip():
@@ -64,10 +73,7 @@ class SafeDownloader:
         unique_id = uuid.uuid4().hex[:8]
         zip_path = os.path.join(self.temp_dir, f"{album_name}_{unique_id}.zip")
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": getattr(album, "source_page", "")
-        }
+        src_page_ref = getattr(album, "source_page", "")
 
         semaphore = asyncio.Semaphore(5)
 
@@ -110,7 +116,8 @@ class SafeDownloader:
                                 pass
                             await write_queue.put((img_filename, content))
                     else:
-                        res = await client.get(target_url, headers=headers, timeout=45.0)
+                        req_headers = resolve_anti_hotlink_headers(target_url, referer=src_page_ref)
+                        res = await client.get(target_url, headers=req_headers, timeout=45.0)
                         if res.status_code == 200:
                             content = res.content
                             if remove_exif:
@@ -135,7 +142,7 @@ class SafeDownloader:
                     if item is None:
                         # Add metadata
                         try:
-                            meta_json = json.dumps(album.model_dump(), indent=2, ensure_ascii=False)
+                            meta_json = json.dumps(album.model_dump() if hasattr(album, "model_dump") else album.dict(), indent=2, ensure_ascii=False)
                             zip_file.writestr("metadata.json", meta_json)
                         except Exception:
                             pass
@@ -220,7 +227,7 @@ class SafeDownloader:
 
                 # Put metadata inside album folder
                 try:
-                    meta_json = json.dumps(album.model_dump(), indent=2, ensure_ascii=False)
+                    meta_json = json.dumps(album.model_dump() if hasattr(album, "model_dump") else album.dict(), indent=2, ensure_ascii=False)
                     await write_queue.put((f"{folder_name}/metadata.json", meta_json.encode("utf-8")))
                 except Exception:
                     pass

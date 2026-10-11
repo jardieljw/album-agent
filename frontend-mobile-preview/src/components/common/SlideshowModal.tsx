@@ -7,14 +7,21 @@ import {
   ChevronRight,
   Maximize2,
   Minimize2,
+  Maximize,
+  Minimize,
   Gauge,
   Check,
   Layers,
   SunMedium,
   Blend,
-  Film
+  Film,
+  Lock,
+  Unlock,
+  Heart,
+  FolderHeart
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
+import { isDesktopApp, toggleAppFullscreen, exitAllFullscreen } from '../../services/desktopService';
 import {
   extractDominantColors,
   extractSpatialDualColors,
@@ -24,15 +31,50 @@ import {
   rgbToHex,
 } from '../../services/colorExtractor';
 
+import { useImagePreloader, isImagePreloaded } from '../../hooks/useImagePreloader';
+import { getSlideshowAnimationClass, getSpeedClass, getDistanceClass } from '../../services/motionConfig';
+
 export type SlideshowBackdropMode = 'mirror' | 'single' | 'dual' | 'cinema';
 
 export const SlideshowModal: React.FC = () => {
-  const { slideshowOpen, setSlideshowOpen, albums, activeAlbumId, settings } = useAppStore();
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const { slideshowOpen, slideshowInitialIndex, setSlideshowOpen, albums, activeAlbumId, toggleFavoriteAlbum, toggleFavoriteImage, settings } = useAppStore();
+  const [currentIndex, setCurrentIndex] = useState(slideshowInitialIndex || 0);
+  useEffect(() => {
+    if (slideshowOpen) {
+      setCurrentIndex(slideshowInitialIndex || 0);
+    }
+  }, [slideshowOpen, slideshowInitialIndex]);
   const [isPlaying, setIsPlaying] = useState(true);
   const [speedSeconds, setSpeedSeconds] = useState(3); // 1s, 2s, 3s, 5s, 10s
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fitMode, setFitMode] = useState<'contain' | 'cover'>('contain');
   const [isImmersive, setIsImmersive] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const isLockedRef = useRef(isLocked);
+  const [unlockButtonVisible, setUnlockButtonVisible] = useState(true);
+  const unlockTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    isLockedRef.current = isLocked;
+    if (isLocked) {
+      resetUnlockTimer();
+    } else {
+      if (unlockTimerRef.current) {
+        clearTimeout(unlockTimerRef.current);
+      }
+      setUnlockButtonVisible(false);
+    }
+  }, [isLocked]);
+
+  const resetUnlockTimer = () => {
+    setUnlockButtonVisible(true);
+    if (unlockTimerRef.current) {
+      clearTimeout(unlockTimerRef.current);
+    }
+    unlockTimerRef.current = setTimeout(() => {
+      setUnlockButtonVisible(false);
+    }, 2500);
+  };
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showBackdropMenu, setShowBackdropMenu] = useState(false);
   const [backdropMode, setBackdropMode] = useState<SlideshowBackdropMode>(() => {
@@ -42,9 +84,23 @@ export const SlideshowModal: React.FC = () => {
   // Dynamic Inactivity Auto-Hide Engine (Desktop & iOS)
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastMousePosRef = useRef({ x: -1, y: -1 });
+  const lastArrowNavTimeRef = useRef(0);
+  const isFullscreenRef = useRef(isFullscreen);
+  const isImmersiveRef = useRef(isImmersive);
+
+  useEffect(() => {
+    isFullscreenRef.current = isFullscreen;
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    isImmersiveRef.current = isImmersive;
+  }, [isImmersive]);
+
   const HIDE_TIMEOUT_MS = 2500;
 
   const resetHideTimer = () => {
+    if (isLocked) return;
     setControlsVisible(true);
     if (hideTimerRef.current) {
       clearTimeout(hideTimerRef.current);
@@ -56,36 +112,112 @@ export const SlideshowModal: React.FC = () => {
     }, HIDE_TIMEOUT_MS);
   };
 
+  // Restore desktop window state when closing slideshow
+  useEffect(() => {
+    return () => {
+      exitAllFullscreen();
+    };
+  }, []);
+
   useEffect(() => {
     if (!slideshowOpen) return;
 
     resetHideTimer();
 
-    const handleActivity = () => {
+    const handlePointerActivity = (e: MouseEvent | PointerEvent) => {
+      // Ignora eventos de mouse sintéticos disparados após navegação por setas ou sem deslocamento físico
+      if (Date.now() - lastArrowNavTimeRef.current < 500) return;
+      if (e.clientX === lastMousePosRef.current.x && e.clientY === lastMousePosRef.current.y) return;
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+      if (isLockedRef.current) {
+        resetUnlockTimer();
+      } else {
+        resetHideTimer();
+      }
+    };
+
+    const handleTouchActivity = () => {
+      if (isLockedRef.current) {
+        resetUnlockTimer();
+      } else {
+        resetHideTimer();
+      }
+    };
+
+    const handleKeyActivity = (e: KeyboardEvent) => {
+      const isArrowKey = e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowDown';
+      if ((isFullscreenRef.current || isImmersiveRef.current) && isArrowKey) {
+        lastArrowNavTimeRef.current = Date.now();
+        // As setas do teclado não ativam o retorno dos botões no modo fullscreen / slides
+        return;
+      }
       resetHideTimer();
     };
 
-    window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('mousedown', handleActivity);
-    window.addEventListener('touchstart', handleActivity, { passive: true });
-    window.addEventListener('touchmove', handleActivity, { passive: true });
-    window.addEventListener('keydown', handleActivity);
+    window.addEventListener('mousemove', handlePointerActivity, { passive: true });
+    window.addEventListener('pointermove', handlePointerActivity, { passive: true });
+    window.addEventListener('mousedown', handlePointerActivity);
+    window.addEventListener('wheel', handlePointerActivity, { passive: true });
+    window.addEventListener('touchstart', handleTouchActivity, { passive: true });
+    window.addEventListener('touchmove', handleTouchActivity, { passive: true });
+    window.addEventListener('keydown', handleKeyActivity);
 
     return () => {
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current);
       }
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('mousedown', handleActivity);
-      window.removeEventListener('touchstart', handleActivity);
-      window.removeEventListener('touchmove', handleActivity);
-      window.removeEventListener('keydown', handleActivity);
+      if (unlockTimerRef.current) {
+        clearTimeout(unlockTimerRef.current);
+      }
+      window.removeEventListener('mousemove', handlePointerActivity);
+      window.removeEventListener('pointermove', handlePointerActivity);
+      window.removeEventListener('mousedown', handlePointerActivity);
+      window.removeEventListener('wheel', handlePointerActivity);
+      window.removeEventListener('touchstart', handleTouchActivity);
+      window.removeEventListener('touchmove', handleTouchActivity);
+      window.removeEventListener('keydown', handleKeyActivity);
     };
   }, [slideshowOpen]);
 
   const currentAlbum = albums.find(a => a.id === activeAlbumId) || albums[0];
   const images = currentAlbum?.images || [];
   const currentImage = images[currentIndex];
+
+  const [slideHighResLoaded, setSlideHighResLoaded] = useState(() => {
+    return isImagePreloaded(currentImage?.originalUrl || '');
+  });
+
+  const fullSlideUrl = currentImage?.originalUrl || currentImage?.rawOriginalUrl;
+  const isSlidePreloaded = Boolean(fullSlideUrl && isImagePreloaded(fullSlideUrl));
+  const isSlideHdReady = slideHighResLoaded || isSlidePreloaded;
+
+  // Preload preditivo em background dos próximos slides com foco ativo e cancelamento imediato
+  useImagePreloader({
+    images,
+    currentIndex,
+    enabled: slideshowOpen,
+    windowSize: 2,
+    mode: 'original',
+    debounceMs: 200,
+    waitForCurrentLoaded: true,
+    isCurrentLoaded: isSlideHdReady,
+  });
+
+  useEffect(() => {
+    if (currentImage?.originalUrl && isImagePreloaded(currentImage.originalUrl)) {
+      setSlideHighResLoaded(true);
+    } else {
+      setSlideHighResLoaded(false);
+    }
+  }, [currentImage?.id]);
+  // Efeito de transição e velocidade configurados pelo usuário (Motion Engine)
+  const slideshowAnimSetting = settings.slideshowAnimation || 'switch';
+  const slideshowAnimClass = getSlideshowAnimationClass(slideshowAnimSetting, settings.disableAllAnimations);
+  const speedClass = getSpeedClass(settings.animationSpeed || 'normal');
+  const distanceClass = getDistanceClass(settings.animationDistance || 'normal');
+
+  const isImageFav = Boolean((currentImage as any)?.isFavorite);
+  const isAlbumFav = Boolean(currentAlbum?.isFavorite);
 
   const getInitialColors = (img?: typeof currentImage) => {
     const pal = img?.colorPalette;
@@ -147,9 +279,13 @@ export const SlideshowModal: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(updateImageDimensions, 60);
-    return () => clearTimeout(timer);
-  }, [currentIndex, isImmersive, isFullscreen, imageAspect, controlsVisible]);
+    const timer1 = setTimeout(updateImageDimensions, 60);
+    const timer2 = setTimeout(updateImageDimensions, 520);
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
+  }, [currentIndex, isImmersive, isFullscreen, imageAspect, controlsVisible, isLocked]);
 
   // Dynamically synchronize authentic dominant & spatial dual colors (Meio vs Laterais)
   useEffect(() => {
@@ -220,8 +356,9 @@ export const SlideshowModal: React.FC = () => {
   // Fullscreen change listener
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-      if (!document.fullscreenElement) {
+      const isFs = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+      setIsFullscreen(isFs);
+      if (!isFs) {
         setIsImmersive(false);
       }
     };
@@ -234,58 +371,57 @@ export const SlideshowModal: React.FC = () => {
     if (!slideshowOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      resetHideTimer();
+      const isArrowKey = e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowDown';
+      if ((isFullscreenRef.current || isImmersiveRef.current) && isArrowKey) {
+        lastArrowNavTimeRef.current = Date.now();
+        // Não acorda nem restaura os botões quando estiver navegando pelas setas em tela cheia
+      } else {
+        resetHideTimer();
+      }
+
       if (e.key === 'Escape') {
-        if (document.fullscreenElement) {
-          document.exitFullscreen?.().catch(() => {});
+        if (isLocked) {
+          setIsLocked(false);
+          resetHideTimer();
+          return;
         }
+        exitAllFullscreen(setIsFullscreen);
         setSlideshowOpen(false);
+      } else if (e.key.toLowerCase() === 'l') {
+        setIsLocked(prev => {
+          if (prev) resetHideTimer();
+          return !prev;
+        });
       } else if (e.key === 'ArrowRight') {
+        lastArrowNavTimeRef.current = Date.now();
         setCurrentIndex(i => (i + 1) % images.length);
       } else if (e.key === 'ArrowLeft') {
+        lastArrowNavTimeRef.current = Date.now();
         setCurrentIndex(i => (i > 0 ? i - 1 : images.length - 1));
       } else if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
         setIsPlaying(p => !p);
-      } else if (e.key.toLowerCase() === 'f') {
+      } else if (e.key.toLowerCase() === 'p' || e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setFitMode(m => (m === 'contain' ? 'cover' : 'contain'));
+      } else if (e.key.toLowerCase() === 'f' || e.key === 'F11') {
+        e.preventDefault();
         toggleFullscreen();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [slideshowOpen, images.length]);
+  }, [slideshowOpen, images.length, isFullscreen, isImmersive, isLocked]);
 
   if (!slideshowOpen || images.length === 0) return null;
 
   const toggleFullscreen = () => {
     resetHideTimer();
-    // Check if browser supports HTML5 Fullscreen API (Desktop / Android / Mac)
-    if (document.fullscreenEnabled || (document.documentElement as any).webkitRequestFullscreen) {
-      if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
-        const el = document.documentElement as any;
-        const req = el.requestFullscreen || el.webkitRequestFullscreen;
-        if (req) {
-          req.call(el).then(() => {
-            setIsFullscreen(true);
-            setIsImmersive(true);
-          }).catch(() => {
-            // Fallback for iOS Safari
-            setIsImmersive(prev => !prev);
-          });
-        } else {
-          setIsImmersive(prev => !prev);
-        }
-      } else {
-        const doc = document as any;
-        const exit = doc.exitFullscreen || doc.webkitExitFullscreen;
-        if (exit) exit.call(doc).catch(() => {});
-        setIsFullscreen(false);
-        setIsImmersive(false);
-      }
-    } else {
-      // iOS Safari iPhone Immersive Fallback (Auto-hides UI for 100% borderless theater view)
-      setIsImmersive(prev => !prev);
+    const nextState = !isFullscreen;
+    toggleAppFullscreen(isFullscreen, setIsFullscreen);
+    if (nextState) {
+      setControlsVisible(false);
     }
   };
 
@@ -308,6 +444,7 @@ export const SlideshowModal: React.FC = () => {
   const normalizedLateralColor = normalizeHex(lateralColor, normalizedSecColor);
 
   const isPt = settings?.language === 'pt-BR';
+  const isEn = settings?.language === 'en-US';
   const backdropOptions = [
     {
       key: 'mirror' as SlideshowBackdropMode,
@@ -392,6 +529,7 @@ export const SlideshowModal: React.FC = () => {
   return (
     <div
       onClick={() => {
+        if (isLocked) return;
         if (showBackdropMenu) {
           setShowBackdropMenu(false);
           resetHideTimer();
@@ -408,8 +546,10 @@ export const SlideshowModal: React.FC = () => {
           setControlsVisible(false);
         }
       }}
-      className={`fixed inset-0 h-[100dvh] max-h-[100dvh] z-50 bg-black flex flex-col items-center justify-center select-none animate-fade-in overflow-hidden ${
-        !controlsVisible ? 'cursor-none' : 'cursor-default'
+      className={`fixed inset-0 w-full h-full bg-black flex flex-col items-center justify-center select-none animate-backdrop-fade overflow-hidden transition-all duration-300 ease-out ${
+        isFullscreen ? 'z-[9999] m-0 p-0 border-0' : 'z-50'
+      } ${
+        !controlsVisible ? 'fullscreen-cursor-hidden cursor-none' : 'cursor-default'
       }`}
     >
       {/* 4 Backdrop Lighting Modes */}
@@ -446,27 +586,64 @@ export const SlideshowModal: React.FC = () => {
         />
       )}
 
+      {/* Floating Unlock Button when locked with dynamic auto-hide */}
+      {isLocked && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute top-4 left-4 z-40 transition-all duration-500 ease-out ${
+            unlockButtonVisible
+              ? 'opacity-100 translate-y-0 pointer-events-auto'
+              : 'opacity-0 -translate-y-4 pointer-events-none'
+          }`}
+        >
+          <button
+            onClick={() => {
+              setIsLocked(false);
+              resetHideTimer();
+            }}
+            className="px-3.5 py-2 rounded-full bg-black/80 hover:bg-black/95 text-amber-300 hover:text-amber-200 border border-amber-500/50 backdrop-blur-md transition-all shadow-2xl active:scale-95 flex items-center gap-2 text-xs font-semibold cursor-pointer"
+            title={isPt ? "Clique para destravar os controles do slider (ou pressione 'L' / 'Esc')" : "Click to unlock slider controls (or press 'L' / 'Esc')"}
+          >
+            <Unlock size={14} className="animate-pulse" />
+            <span>Controles Travados • Destravar</span>
+          </button>
+        </div>
+      )}
+
       {/* Top Floating Bar with iOS Safe Area & Dynamic Auto-Hide Fade */}
       <div
         onClick={e => e.stopPropagation()}
         className={`absolute top-4 inset-x-4 sm:inset-x-6 flex items-center justify-between z-20 pt-safe transition-all duration-500 ease-out ${
-          controlsVisible && !isImmersive
+          controlsVisible && !isLocked
             ? 'opacity-100 translate-y-0 pointer-events-auto'
             : 'opacity-0 -translate-y-12 pointer-events-none'
         }`}
       >
-        <div className="text-white text-xs font-semibold bg-black/60 px-3.5 py-1.5 rounded-full backdrop-blur-md border border-white/10 flex items-center gap-2 max-w-[260px] sm:max-w-md truncate shadow-lg">
-          <span className="truncate">{currentAlbum.title}</span>
+        <div className="text-white text-xs font-semibold bg-black/60 px-3.5 py-1.5 rounded-full backdrop-blur-md border-0 flex items-center gap-2 max-w-[260px] sm:max-w-md truncate shadow-2xl">
+          <span className="truncate">{currentAlbum?.title || ""}</span>
           <span className="text-brand-400 font-mono font-bold shrink-0">
             ({currentIndex + 1}/{images.length})
           </span>
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Fit / Fill Toggle Button */}
+          <button
+            onClick={() => setFitMode(m => m === 'contain' ? 'cover' : 'contain')}
+            className={`p-2.5 rounded-full transition-all border-0 active:scale-95 shadow-2xl cursor-pointer ${
+              fitMode === 'cover'
+                ? 'bg-brand-600 text-white border-brand-400 shadow-glow-brand ring-2 ring-brand-400/50'
+                : 'bg-black/60 text-white hover:bg-black/90 border-white/10'
+            }`}
+            title={fitMode === 'cover' ? (isPt ? 'Ajustar à Tela (P)' : 'Fit to Screen (P)') : (isPt ? 'Preencher Tela Inteira (P)' : 'Fill Screen (P)')}
+          >
+            {fitMode === 'cover' ? <Minimize size={16} /> : <Maximize size={16} />}
+          </button>
+
           {/* Fullscreen / Immersive Button */}
           <button
             onClick={toggleFullscreen}
-            className={`p-2 rounded-full transition-all border active:scale-95 shadow-lg ${
+            className={`p-2.5 rounded-full transition-all border-0 active:scale-95 shadow-2xl ${
               isImmersive || isFullscreen
                 ? 'bg-brand-600 text-white border-brand-400 shadow-glow-brand'
                 : 'bg-black/60 text-white hover:bg-black/90 border-white/10'
@@ -482,10 +659,10 @@ export const SlideshowModal: React.FC = () => {
               if (document.fullscreenElement) {
                 document.exitFullscreen?.().catch(() => {});
               }
-              setSlideshowOpen(false);
+                    setSlideshowOpen(false);
             }}
-            className="p-2 rounded-full bg-black/60 text-white hover:bg-black/90 transition-all border border-white/10 active:scale-95 shadow-lg"
-            title="Fechar Apresentação"
+            className="p-2.5 rounded-full bg-black/60 text-white hover:bg-black/90 transition-all border-0 active:scale-95 shadow-2xl"
+            title={isPt ? "Fechar Apresentação" : "Close Slideshow"}
           >
             <X size={18} />
           </button>
@@ -493,13 +670,41 @@ export const SlideshowModal: React.FC = () => {
       </div>
 
       {/* Main Slide with Dynamic Aspect Ratio & Backlight Halo */}
-      <div className="relative w-full h-full min-h-0 min-w-0 flex items-center justify-center p-2 sm:p-6 z-10 overflow-hidden">
+      <div
+        onDoubleClick={toggleFullscreen}
+        className={`relative w-full h-full min-h-0 min-w-0 flex items-center justify-center z-10 overflow-hidden transition-all duration-500 ease-out ${
+          isFullscreen ? 'p-0' : 'p-2 sm:p-6'
+        } ${!controlsVisible ? 'cursor-none' : 'cursor-pointer'}`}
+      >
+        {/* Camada 1: Miniatura Instantânea (0ms LQIP) com transição suave */}
+        {currentImage.thumbnailUrl &&
+          currentImage.originalUrl &&
+          currentImage.thumbnailUrl !== currentImage.originalUrl &&
+          !isSlideHdReady && (
+            <img
+              key={`slide-thumb-${currentImage.id}-${slideshowAnimClass}`}
+              src={currentImage.thumbnailUrl}
+              alt=""
+              className={`pointer-events-none border-0 absolute z-10 ${slideshowAnimClass} ${speedClass} ${distanceClass} ${
+                isFullscreen
+                  ? (fitMode === 'cover' ? 'w-full h-full object-cover rounded-none' : 'w-full h-full object-contain rounded-none')
+                  : (!controlsVisible || isImmersive || isLocked
+                      ? (fitMode === 'cover' ? 'w-full h-full object-cover rounded-2xl' : 'max-h-[96vh] max-w-[96vw] object-contain rounded-2xl')
+                      : (fitMode === 'cover' ? 'w-full h-full object-cover rounded-2xl' : 'max-h-[80vh] max-w-[90vw] object-contain rounded-2xl'))
+              }`}
+            />
+          )}
+
+        {/* Camada 2: Imagem Principal em Alta Resolução com Encaixe Integral Proporcional */}
         <img
           ref={slideImgRef}
-          key={currentImage.id}
+          key={`slide-hd-${currentImage.id}-${slideshowAnimClass}`}
           src={currentImage.originalUrl}
           alt={currentImage.title}
+          decoding="async"
+          {...({ fetchPriority: 'high' } as any)}
           onLoad={(e) => {
+            setSlideHighResLoaded(true);
             const img = e.currentTarget;
             if (img.naturalWidth && img.naturalHeight) {
               setImageAspect(img.naturalWidth / img.naturalHeight);
@@ -513,10 +718,23 @@ export const SlideshowModal: React.FC = () => {
             }
           }}
           style={{
-            filter: `drop-shadow(0 0 35px ${backdropMode === 'dual' ? normalizedCenterColor + '35' : normalizedColor + '30'})`
+            filter: isFullscreen ? 'none' : `drop-shadow(0 0 35px ${backdropMode === 'dual' ? normalizedCenterColor + '35' : normalizedColor + '30'})`,
+            willChange: 'max-height, max-width, transform, opacity',
           }}
-          className={`object-contain rounded-2xl shadow-2xl animate-fade-in transition-all duration-700 pointer-events-none ${
-            !controlsVisible || isImmersive ? 'max-h-[96vh] max-w-[96vw]' : 'max-h-[80vh] max-w-[90vw]'
+          className={`${slideshowAnimClass} ${speedClass} ${distanceClass} ${
+            isSlideHdReady ? '' : 'transition-opacity duration-150'
+          } pointer-events-none border-0 relative z-10 ${
+            !isSlideHdReady && currentImage.thumbnailUrl && currentImage.thumbnailUrl !== currentImage.originalUrl
+              ? 'opacity-0'
+              : 'opacity-100'
+          } ${
+            isFullscreen
+              ? (fitMode === 'cover'
+                  ? 'w-full h-full object-cover rounded-none shadow-none'
+                  : 'w-full h-full object-contain rounded-none shadow-none')
+              : (!controlsVisible || isImmersive || isLocked
+                  ? (fitMode === 'cover' ? 'w-full h-full object-cover rounded-2xl shadow-2xl' : 'max-h-[96vh] max-w-[96vw] object-contain rounded-2xl shadow-2xl')
+                  : (fitMode === 'cover' ? 'w-full h-full object-cover rounded-2xl shadow-2xl' : 'max-h-[80vh] max-w-[90vw] object-contain rounded-2xl shadow-2xl'))
           }`}
         />
       </div>
@@ -524,8 +742,8 @@ export const SlideshowModal: React.FC = () => {
       {/* Bottom Floating Control Pill with Velocity & Dynamic Auto-Hide Fade */}
       <div
         onClick={e => e.stopPropagation()}
-        className={`absolute bottom-6 flex items-center gap-2 sm:gap-3 bg-black/85 backdrop-blur-xl px-4 sm:px-5 py-2 rounded-full border border-white/15 z-20 shadow-2xl pb-safe transition-all duration-500 ease-out ${
-          controlsVisible && !isImmersive
+        className={`absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 max-w-[calc(100vw-1.5rem)] xl:max-w-fit flex items-center justify-center gap-1.5 xl:gap-3 bg-black/80 backdrop-blur-2xl px-3 xl:px-5 py-2 xl:py-2.5 rounded-full border-0 z-20 shadow-2xl pb-safe transition-all duration-500 ease-out ${
+          controlsVisible && !isLocked
             ? 'opacity-100 translate-y-0 pointer-events-auto'
             : 'opacity-0 translate-y-16 pointer-events-none'
         }`}
@@ -535,10 +753,10 @@ export const SlideshowModal: React.FC = () => {
             setCurrentIndex(i => (i > 0 ? i - 1 : images.length - 1));
             resetHideTimer();
           }}
-          className="text-slate-300 hover:text-white p-1.5 transition-transform active:scale-90"
-          title="Anterior"
+          className="text-slate-300 hover:text-white p-1 sm:p-1.5 transition-transform active:scale-90 shrink-0"
+          title={isEn ? "Previous" : "Anterior"}
         >
-          <ChevronLeft size={20} />
+          <ChevronLeft size={18} className="sm:w-5 sm:h-5" />
         </button>
 
         <button
@@ -546,10 +764,10 @@ export const SlideshowModal: React.FC = () => {
             setIsPlaying(!isPlaying);
             resetHideTimer();
           }}
-          className="w-10 h-10 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-glow-brand transition-all active:scale-95"
+          className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-glow-brand transition-all active:scale-95 shrink-0"
           title={isPlaying ? 'Pausar' : 'Reproduzir'}
         >
-          {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
+          {isPlaying ? <Pause size={15} className="sm:w-[18px] sm:h-[18px]" /> : <Play size={15} className="ml-0.5 sm:w-[18px] sm:h-[18px]" />}
         </button>
 
         <button
@@ -557,24 +775,25 @@ export const SlideshowModal: React.FC = () => {
             setCurrentIndex(i => (i + 1) % images.length);
             resetHideTimer();
           }}
-          className="text-slate-300 hover:text-white p-1.5 transition-transform active:scale-90"
-          title="Próxima"
+          className="text-slate-300 hover:text-white p-1 sm:p-1.5 transition-transform active:scale-90 shrink-0"
+          title={isPt ? "Próxima" : "Next"}
         >
-          <ChevronRight size={20} />
+          <ChevronRight size={18} className="sm:w-5 sm:h-5" />
         </button>
 
-        <div className="h-5 w-px bg-white/20 mx-1"></div>
+        <div className="h-4 sm:h-5 w-px bg-white/20 mx-0.5 sm:mx-1 shrink-0"></div>
 
         {/* Speed Selector */}
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
-            onClick={() => {
-              setShowSpeedMenu(!showSpeedMenu);
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowSpeedMenu(prev => !prev);
               setShowBackdropMenu(false);
               resetHideTimer();
             }}
-            className="flex items-center gap-1 text-slate-200 text-xs font-mono px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 transition-colors"
-            title="Ajustar Velocidade do Slideshow"
+            className="flex items-center gap-1 text-slate-200 text-[11px] sm:text-xs font-mono px-2 sm:px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 transition-colors shrink-0"
+            title={isPt ? "Ajustar Velocidade do Slideshow" : "Adjust Slideshow Speed"}
           >
             <Gauge size={13} className="text-brand-400" />
             <span className="font-bold">{speedSeconds}s</span>
@@ -582,11 +801,15 @@ export const SlideshowModal: React.FC = () => {
 
           {/* Speed Dropdown Menu - Frosted Glass Blur with 50% opacity */}
           {showSpeedMenu && (
-            <div className="absolute bottom-12 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-2xl border border-white/20 rounded-2xl p-1.5 shadow-2xl flex items-center gap-1 z-30 animate-scale-up">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="absolute bottom-12 sm:bottom-14 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-2xl border border-white/20 rounded-2xl p-1.5 shadow-2xl flex items-center gap-1 z-50 animate-scale-up"
+            >
               {speedOptions.map(s => (
                 <button
                   key={s}
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setSpeedSeconds(s);
                     setShowSpeedMenu(false);
                     resetHideTimer();
@@ -604,39 +827,99 @@ export const SlideshowModal: React.FC = () => {
           )}
         </div>
 
-        <div className="h-5 w-px bg-white/20 mx-1"></div>
+        <div className="h-4 sm:h-5 w-px bg-white/20 mx-0.5 sm:mx-1 shrink-0"></div>
+
+        {/* Favoritar Imagem Atual */}
+        <button
+          onClick={() => {
+            if (currentAlbum && currentImage) {
+              toggleFavoriteImage(currentAlbum.id, currentImage.id);
+            }
+            resetHideTimer();
+          }}
+          className={`flex items-center gap-1.5 text-xs p-1.5 sm:px-3 sm:py-1.5 rounded-full border transition-all cursor-pointer shrink-0 ${
+            isImageFav
+              ? 'bg-rose-600/90 border-rose-400 text-white shadow-glow-brand'
+              : 'bg-white/10 hover:bg-rose-500/20 border-white/10 hover:border-rose-400/50 text-slate-200 hover:text-rose-300'
+          }`}
+          title={isImageFav ? (isPt ? 'Remover imagem dos Favoritos' : 'Remove image from Favorites') : (isPt ? 'Favoritar Imagem Atual' : 'Favorite Current Image')}
+        >
+          <Heart size={13} className={isImageFav ? 'fill-white text-white' : 'text-slate-300'} />
+          <span className="font-semibold hidden xl:inline">{isImageFav ? 'Favoritada' : 'Favoritar'}</span>
+        </button>
+
+        {/* Favoritar Álbum */}
+        <button
+          onClick={() => {
+            if (currentAlbum) {
+              toggleFavoriteAlbum(currentAlbum.id);
+            }
+            resetHideTimer();
+          }}
+          className={`flex items-center gap-1.5 text-xs p-1.5 sm:px-3 sm:py-1.5 rounded-full border transition-all cursor-pointer shrink-0 ${
+            isAlbumFav
+              ? 'bg-rose-500/30 border-rose-500/50 text-rose-300 shadow-glow-brand'
+              : 'bg-white/10 hover:bg-violet-600/20 border-white/10 hover:border-violet-400/50 text-slate-200 hover:text-violet-300'
+          }`}
+          title={isAlbumFav ? (isPt ? 'Remover álbum dos Favoritos' : 'Remove from Favorites') : (isPt ? 'Favoritar este Álbum' : 'Favorite this Album')}
+        >
+          <FolderHeart size={13} className={isAlbumFav ? 'fill-rose-400 text-rose-400' : 'text-slate-300'} />
+          <span className="font-semibold hidden xl:inline">{isAlbumFav ? (isPt ? 'Álbum Favorito' : 'Favorite Album') : (isPt ? 'Favoritar Álbum' : 'Favorite Album')}</span>
+        </button>
+
+        <div className="h-4 sm:h-5 w-px bg-white/20 mx-0.5 sm:mx-1 shrink-0"></div>
+
+        {/* Lock Controls Button (Modo Travado) */}
+        <button
+          onClick={() => {
+            setIsLocked(true);
+            setControlsVisible(false);
+            setShowSpeedMenu(false);
+            setShowBackdropMenu(false);
+          }}
+          className="flex items-center gap-1.5 text-slate-200 text-xs p-1.5 sm:px-3 sm:py-1.5 rounded-full bg-white/10 hover:bg-amber-500/20 border border-white/10 hover:border-amber-500/40 hover:text-amber-300 transition-all cursor-pointer shrink-0"
+          title={isEn ? "Lock Controls (Pure Immersive Mode • Press 'L' to toggle)" : "Travar Controles (Modo Imersivo Puro • Pressione 'L' para alternar)"}
+        >
+          <Lock size={13} className="text-amber-400" />
+          <span className="font-semibold hidden xl:inline">Travar</span>
+        </button>
 
         {/* Backdrop Lighting Mode Selector - Clean Single Icon, Zero Emojis */}
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
-            onClick={() => {
-              setShowBackdropMenu(!showBackdropMenu);
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowBackdropMenu(prev => !prev);
               setShowSpeedMenu(false);
               resetHideTimer();
             }}
-            className="flex items-center gap-2 text-slate-200 text-xs px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 transition-colors"
-            title="Modo de Iluminação de Fundo"
+            className="flex items-center gap-1.5 sm:gap-2 text-slate-200 text-xs p-1.5 sm:px-3 sm:py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 transition-colors shrink-0 cursor-pointer"
+            title={isPt ? "Modo de Iluminação de Fundo" : "Ambient Lighting Mode"}
           >
             <CurrentModeIcon size={14} className={currentBackdropOpt.iconColor} />
-            <span className="font-semibold">{currentBackdropOpt.label}</span>
+            <span className="font-semibold hidden xl:inline">{currentBackdropOpt.label}</span>
           </button>
 
-          {/* Backdrop Dropdown Menu - Frosted Glass Blur with 50% opacity */}
+          {/* Backdrop Dropdown Menu - Frosted Glass Blur with 80% opacity, elevated z-index */}
           {showBackdropMenu && (
-            <div className="absolute bottom-12 right-0 sm:left-1/2 sm:-translate-x-1/2 bg-black/50 backdrop-blur-2xl border border-white/20 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 z-30 min-w-[240px] animate-scale-up">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="absolute bottom-12 sm:bottom-14 right-0 bg-black/90 backdrop-blur-2xl border border-white/20 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 z-50 min-w-[220px] sm:min-w-[240px] max-w-[calc(100vw-2rem)] animate-scale-up"
+            >
               {backdropOptions.map(opt => {
                 const Icon = opt.icon;
                 const isSelected = backdropMode === opt.key;
                 return (
                   <button
                     key={opt.key}
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setBackdropMode(opt.key);
                       setShowBackdropMenu(false);
                       localStorage.setItem('slideshow_backdrop_mode', opt.key);
                       resetHideTimer();
                     }}
-                    className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all text-left flex items-center justify-between ${
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all text-left flex items-center justify-between cursor-pointer ${
                       isSelected
                         ? 'bg-brand-600 text-white shadow-glow-brand'
                         : 'text-slate-300 hover:text-white hover:bg-white/10'

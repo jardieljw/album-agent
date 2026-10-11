@@ -18,7 +18,7 @@ try:
     load_dotenv()
 except ImportError:
     pass
-# Configuração segura do Playwright para executável empacotado (.exe)
+# Safe Playwright configuration for packaged executable (.exe)
 if getattr(sys, 'frozen', False):
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expandvars(r"%LOCALAPPDATA%\ms-playwright")
     bundle_driver = os.path.join(getattr(sys, '_MEIPASS', ''), 'playwright', 'driver')
@@ -54,6 +54,12 @@ from .video_service import video_service
 from .trash_service import trash_service
 
 from ..core.models import Album, AlbumImage, ResolutionMethod, TelemetryMetrics
+from ..core.color_extractor import (
+    PALETTE_ENGINE_VERSION,
+    extract_dominant_colors_from_bytes,
+    extract_dominant_colors_from_path,
+    extract_dominant_colors_from_pil,
+)
 from ..observability.debugger import AgentDebugger
 from ..browser.engine import BrowserEngine
 from ..browser.tools import BrowserTools
@@ -76,6 +82,7 @@ from ..scout.layout_explorer import GeminiLayoutExplorer
 from ..scout.knowledge_bridge import ScoutKnowledgeBridge
 from ..core.network_profiles import (
     resolve_anti_hotlink_headers,
+    get_apex_domain,
     extract_canonical_target_page,
     get_cookie_domains_for_url,
     matches_embed_player_provider,
@@ -95,6 +102,10 @@ logger = logging.getLogger("agent_server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 app = FastAPI(title="AI Album Intelligence Agent API")
+@app.on_event("startup")
+async def on_app_startup():
+    asyncio.create_task(auto_migrate_palettes_in_background())
+
 
 # Enable CORS for local network and iPhone Safari/Chrome access
 app.add_middleware(
@@ -154,7 +165,7 @@ if AUTH_PASSWORD:
         if not auth_header or not auth_header.startswith("Basic "):
             return Response(
                 status_code=401,
-                content="Acesso Restrito: Por favor, insira usuario e senha.",
+                content="Restricted Access: Please enter username and password.",
                 headers={"WWW-Authenticate": 'Basic realm="AI Album Agent"'},
             )
 
@@ -173,7 +184,7 @@ if AUTH_PASSWORD:
         except Exception:
             return Response(
                 status_code=401,
-                content="Falha na autenticacao.",
+                content="Authentication failed.",
                 headers={"WWW-Authenticate": 'Basic realm="AI Album Agent"'},
             )
 
@@ -202,7 +213,7 @@ ALBUMS_DIR = os.path.join(DATA_DIR, "albums")
 VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
 TRASH_DIR = os.path.join(DATA_DIR, "trash")
 
-# Auto-criação da árvore caso o usuário execute o .exe em uma pasta vazia
+# Auto-creation of directory tree if user executes .exe in an empty folder
 for _d in [DATA_DIR, ALBUMS_DIR, VIDEOS_DIR, TRASH_DIR, os.path.join(VIDEOS_DIR, "Geral")]:
     os.makedirs(_d, exist_ok=True)
 
@@ -211,6 +222,9 @@ meta_knowledge_graph = MetaKnowledgeGraph(storage_path=os.path.join(DATA_DIR, "m
 
 # Memory stores
 _completed_albums: Dict[str, Album] = {}
+_disk_album_mtimes: Dict[str, float] = {}
+_cached_album_summaries: List[Dict[str, Any]] = []
+_summaries_dirty: bool = True
 _active_event_queues: Dict[str, asyncio.Queue] = {}
 _session_events_history: Dict[str, List[Dict[str, Any]]] = {}
 _active_jobs: Dict[str, Dict[str, Any]] = {}
@@ -355,7 +369,7 @@ def _load_jobs_from_disk(clear_zombies: bool = False):
                     "current": img_count,
                     "total": img_count,
                     "title": a.title,
-                    "status": f"Álbum salvo ({img_count} fotos originais)"
+                    "status": f"Album saved ({img_count} original photos)"
                 },
                 "resolved_count": img_count,
             }
@@ -371,16 +385,16 @@ def _load_jobs_from_disk(clear_zombies: bool = False):
                 cnt = j.get("resolved_count") or j.get("progress", {}).get("current") or 8
                 j["duration_seconds"] = round(max(3.5, cnt * 1.6), 1)
 
-    # Limpar jobs zumbis APENAS UMA VEZ no boot inicial do servidor, e NUNCA tocar tarefas com controladores ativos
+    # Interrupted jobs at app shutdown are placed on PAUSE on initial boot
     if clear_zombies and not _startup_zombies_cleared:
         _startup_zombies_cleared = True
         for jid, j in list(_active_jobs.items()):
             if jid in _job_controllers:
                 continue
             if j.get("status") in ("running", "queued", "active"):
-                j["status"] = "cancelled"
+                j["status"] = "paused"
                 if isinstance(j.get("progress"), dict):
-                    j["progress"]["status"] = "Cancelado"
+                    j["progress"]["status"] = "Pausado (aguardando retomada manual)"
                 updated = True
 
     if updated:
@@ -595,6 +609,8 @@ def sanitize_album_images(album: Album) -> Album:
 
 
 def _save_album_to_disk(album_id: str, album: Album):
+    global _summaries_dirty
+    _summaries_dirty = True
     """Saves completed album to data/albums/<album_id>.json on disk AND mirrors to HF."""
     try:
         sanitize_album_images(album)
@@ -654,7 +670,7 @@ def _save_album_to_disk(album_id: str, album: Album):
             album.is_favorite = False
             album.metadata["is_favorite"] = False
 
-        album_data = album.model_dump()
+        album_data = album.model_dump() if hasattr(album, "model_dump") else album.dict()
 
         with open(fpath, "w", encoding="utf-8") as f:
             json.dump(album_data, f, indent=2, ensure_ascii=False)
@@ -675,7 +691,7 @@ def _save_album_to_disk(album_id: str, album: Album):
             _active_jobs[album_id]["progress"] = {
                 "current": len(album.images),
                 "total": len(album.images),
-                "status": "Álbum salvo com sucesso"
+                "status": "Album saved successfully"
             }
             _active_jobs[album_id]["resolved_count"] = len(album.images)
             _active_jobs[album_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -686,10 +702,129 @@ def _save_album_to_disk(album_id: str, album: Album):
 
 _hf_restore_done = False  # Ensures HF restore runs only once at startup
 
+
+_palette_extract_semaphore = asyncio.Semaphore(10)
+
+async def extract_palette_for_media_url(
+    img_url: str,
+    source_page: str = "",
+    client: Optional[httpx.AsyncClient] = None
+) -> Optional[List[str]]:
+    if not img_url:
+        return None
+    # 1. Local image file
+    if "local://albums/" in img_url:
+        rel = img_url.split("local://albums/")[-1].replace("/", os.sep).replace("\\", os.sep)
+        local_target = os.path.join(ALBUMS_DIR, rel)
+        if os.path.exists(local_target):
+            pal = extract_dominant_colors_from_path(local_target, num_colors=8, fallback=False)
+            return pal if pal else None
+        return None
+
+    # 2. Base64 data URI
+    if img_url.startswith("data:image/"):
+        try:
+            import base64
+            _, enc = img_url.split(",", 1)
+            raw = base64.b64decode(enc)
+            pal = extract_dominant_colors_from_bytes(raw, num_colors=8, fallback=False)
+            return pal if pal else None
+        except Exception:
+            return None
+
+    # 3. Remote URL via HTTP fetch
+    if img_url.startswith("http://") or img_url.startswith("https://"):
+        async with _palette_extract_semaphore:
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                }
+                anti_h = resolve_anti_hotlink_headers(img_url, referer=source_page)
+                headers.update(anti_h)
+
+                async def _fetch(c: httpx.AsyncClient):
+                    res = await c.get(img_url, headers=headers)
+                    if res.status_code == 200 and res.content:
+                        return extract_dominant_colors_from_bytes(res.content, num_colors=8, fallback=False)
+                    return None
+
+                if client is not None:
+                    return await _fetch(client)
+                else:
+                    async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as local_client:
+                        return await _fetch(local_client)
+            except Exception:
+                return None
+
+    return None
+
+
+async def auto_migrate_palettes_in_background():
+    """
+    Background worker that checks loaded albums on disk.
+    If an album palette_version differs from PALETTE_ENGINE_VERSION or images lack color_palette,
+    it automatically calculates the colors using Pillow and updates data/albums/{session_id}.json.
+    Runs asynchronously with zero impact on user requests or mobile UI.
+    """
+    try:
+        await asyncio.sleep(2.0)
+        if not os.path.exists(ALBUMS_DIR):
+            return
+
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
+            for session_id, album in list(_completed_albums.items()):
+                meta = album.metadata if isinstance(album.metadata, dict) else {}
+                current_ver = meta.get("palette_version")
+                needs_migration = (current_ver != PALETTE_ENGINE_VERSION)
+                has_missing_palettes = any(not getattr(img, "color_palette", None) for img in album.images)
+
+                if needs_migration or has_missing_palettes:
+                    modified = False
+                    for img in album.images:
+                        if not getattr(img, "color_palette", None) or needs_migration:
+                            u = img.thumbnail_url or img.original_url
+                            if u:
+                                pal = await extract_palette_for_media_url(u, source_page=album.source_page, client=client)
+                                if pal:
+                                    img.color_palette = pal
+                                    modified = True
+
+                    if not getattr(album, "cover_color_palette", None) or needs_migration:
+                        if album.images and getattr(album.images[0], "color_palette", None):
+                            album.cover_color_palette = album.images[0].color_palette
+                            modified = True
+                        elif album.cover_image_url:
+                            c_pal = await extract_palette_for_media_url(album.cover_image_url, source_page=album.source_page, client=client)
+                            if c_pal:
+                                album.cover_color_palette = c_pal
+                                modified = True
+
+                    if modified or needs_migration:
+                        if not isinstance(album.metadata, dict):
+                            album.metadata = {}
+                        album.metadata["palette_version"] = PALETTE_ENGINE_VERSION
+                        _save_album_to_disk(session_id, album)
+                        logger.info(f"Auto-migrated palettes for album {session_id} to {PALETTE_ENGINE_VERSION}")
+    except Exception as e:
+        logger.warning(f"Background palette auto-migration notice: {e}")
+
+
+_last_albums_dir_mtime: float = 0.0
+
 def _load_albums_from_disk():
     """Loads previously saved albums from data/albums/ on startup.
-    HF restore runs only once at startup (flag-guarded) to avoid blocking every call."""
-    global _hf_restore_done
+    Fast path: returns in 0ms if directory mtime has not changed."""
+    global _hf_restore_done, _last_albums_dir_mtime, _summaries_dirty, _disk_album_mtimes
+    if not os.path.exists(ALBUMS_DIR):
+        return
+
+    try:
+        dir_mtime = os.path.getmtime(ALBUMS_DIR)
+        if _completed_albums and dir_mtime == _last_albums_dir_mtime and not _summaries_dirty:
+            return
+        _last_albums_dir_mtime = dir_mtime
+    except Exception:
+        pass
 
     # --- Restore albums from HF only on first call (boot) ---
     if not _hf_restore_done:
@@ -742,20 +877,34 @@ def _load_albums_from_disk():
 
     if not os.path.exists(ALBUMS_DIR):
         return
-    for fname in os.listdir(ALBUMS_DIR):
-        if fname.endswith(".json"):
-            if fname.startswith("vid_page_"):
+    current_files = set()
+    changed = False
+
+    try:
+        with os.scandir(ALBUMS_DIR) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".json") or entry.name.startswith("vid_page_"):
+                    if entry.name.startswith("vid_page_") and entry.name.endswith(".json"):
+                        try:
+                            os.remove(entry.path)
+                        except Exception:
+                            pass
+                    continue
+
+                current_files.add(entry.name)
+                album_id = entry.name[:-5]
                 try:
-                    os.remove(os.path.join(ALBUMS_DIR, fname))
-                except Exception:
-                    pass
-                continue
-            fpath = os.path.join(ALBUMS_DIR, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    album_id = fname[:-5]
-                    # Ensure immutable created_at and persistent updated_at
+                    mtime = entry.stat().st_mtime
+                except OSError:
+                    continue
+
+                if album_id in _completed_albums and _disk_album_mtimes.get(entry.name) == mtime:
+                    continue
+
+                fpath = entry.path
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
                     if not data.get("created_at"):
                         meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
                         if meta.get("created_at"):
@@ -764,7 +913,7 @@ def _load_albums_from_disk():
                             data["created_at"] = meta["saved_at"]
                         else:
                             try:
-                                ctime = os.path.getctime(fpath)
+                                ctime = entry.stat().st_ctime
                                 data["created_at"] = datetime.fromtimestamp(ctime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                             except Exception:
                                 data["created_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -777,17 +926,15 @@ def _load_albums_from_disk():
                     needs_disk_persist = ("created_at" not in data or "updated_at" not in data)
                     alb_instance = Album(**data)
 
-                    # Higieniza mídias: desduplicação canônica, tags de gif e metadados
                     sanitize_album_images(alb_instance)
-                    # Auto-heal missing or 1px placeholder covers from genuine HD images
                     healed = ensure_album_cover(alb_instance)
                     if healed or needs_disk_persist:
                         try:
                             with open(fpath, "w", encoding="utf-8") as wf:
-                                json.dump(alb_instance.model_dump(), wf, indent=2, ensure_ascii=False)
+                                json.dump(alb_instance.model_dump() if hasattr(alb_instance, "model_dump") else alb_instance.dict(), wf, indent=2, ensure_ascii=False)
+                            mtime = os.path.getmtime(fpath)
                         except Exception as we:
-                            logger.warning(f"Could not persist auto-healed cover or timestamps for {fname}: {we}")
-
+                            logger.warning(f"Could not persist auto-healed cover or timestamps for {entry.name}: {we}")
 
                     meta_origin = alb_instance.metadata.get("source_origin") if isinstance(alb_instance.metadata, dict) else None
                     if meta_origin:
@@ -796,15 +943,29 @@ def _load_albums_from_disk():
                         if alb_instance.source_page in ("Upload Local", "local://") or alb_instance.source_page.startswith("local://") or album_id.startswith(("manual-", "local-")):
                             alb_instance.source_origin = "local"
                     _completed_albums[album_id] = alb_instance
-            except Exception as e:
-                logger.warning(f"Error loading {fpath}: {e}")
+                    _disk_album_mtimes[entry.name] = mtime
+                    changed = True
+                except Exception as e:
+                    logger.warning(f"Error loading {fpath}: {e}")
+    except Exception as scan_err:
+        logger.warning(f"Error scanning albums dir: {scan_err}")
+
+    deleted = set(_disk_album_mtimes.keys()) - current_files
+    for df in deleted:
+        aid = df[:-5]
+        _completed_albums.pop(aid, None)
+        _disk_album_mtimes.pop(df, None)
+        changed = True
+
+    if changed:
+        _summaries_dirty = True
 
 
 # Load any existing albums, jobs and thumbnails on startup
 _load_albums_from_disk()
 _load_jobs_from_disk(clear_zombies=True)
 try:
-    video_service.auto_heal_all_thumbnails()
+    video_service.auto_heal_all_thumbnails(background=True)
 except Exception as e_th:
     logger.warning(f"Could not auto-heal thumbnails on startup: {e_th}")
 
@@ -869,6 +1030,8 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None          # Ex: "gemini-3.7-flash", "llama3.2", "qwen2.5:7b"
     ollama_url: Optional[str] = None     # Ex: "http://localhost:11434"
     conversation_history: Optional[List[Dict[str, str]]] = None
+    context: Optional[Dict[str, Any]] = None  # UI context: currentView, activeAlbumId, activeFolderId, etc.
+
 
 
 class OllamaStatusResponse(BaseModel):
@@ -880,11 +1043,67 @@ class OllamaStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
-def _sanitize_filename(name: str) -> str:
-    """Sanitizes album and image filenames for safe disk and zip saving."""
-    clean = re.sub(r'[\\/*?:"<>|]', "", name)
-    clean = re.sub(r'\s+', "_", clean).strip("_")
-    return clean[:60] or "album"
+def _sanitize_filename(name: str, default_ext: str = "") -> str:
+    """
+    Sanitizes album and image filenames for safe disk and zip saving.
+    Guarantees extension preservation and safe truncation.
+    """
+    if not name:
+        return f"arquivo{default_ext}" if default_ext else "arquivo"
+
+    # Separate base and extension before sanitizing
+    base, ext = os.path.splitext(name)
+    if not ext and default_ext:
+        ext = default_ext
+
+    # Clean illegal filesystem characters
+    clean_base = re.sub(r'[\\/*?:"<>|]', "", base)
+    clean_base = re.sub(r'\s+', "_", clean_base).strip("._ ")
+    clean_base = clean_base[:80] or "arquivo"
+
+    clean_ext = re.sub(r'[\\/*?:"<>|\s]', "", ext).lower()
+    if clean_ext and not clean_ext.startswith("."):
+        clean_ext = f".{clean_ext}"
+
+    return f"{clean_base}{clean_ext}"
+
+
+def _infer_extension_from_magic_or_mime(raw_bytes: bytes = b"", content_type: str = "") -> str:
+    """Infers standard file extension (.jpg, .png, .webp, .gif, .mp4) from bytes or MIME type."""
+    ct = (content_type or "").lower().split(";")[0].strip()
+
+    # 1. Magic bytes sniffing (highest ground truth)
+    if raw_bytes:
+        if raw_bytes.startswith((b'\xFF\xD8\xFF', b'\xFF\xD8')):
+            return ".jpg"
+        if raw_bytes.startswith(b'\x89PNG\r\n\x1a\n') or raw_bytes.startswith(b'\x89PNG'):
+            return ".png"
+        if raw_bytes[:12].startswith(b'RIFF') and b'WEBP' in raw_bytes[:16]:
+            return ".webp"
+        if raw_bytes.startswith((b'GIF87a', b'GIF89a')):
+            return ".gif"
+        if len(raw_bytes) >= 12 and raw_bytes[4:8] == b'ftyp':
+            return ".mp4"
+        if raw_bytes.startswith(b'PK\x03\x04'):
+            return ".zip"
+
+    # 2. MIME type mapping
+    mime_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/avif": ".avif",
+        "video/mp4": ".mp4",
+        "video/webm": ".webm",
+        "application/zip": ".zip",
+        "application/x-zip-compressed": ".zip",
+    }
+    if ct in mime_map:
+        return mime_map[ct]
+
+    return ".jpg" 
 
 
 @app.get("/api/health")
@@ -937,11 +1156,94 @@ async def debug_probe(url: str = Query(...)):
     return {"url": url, "tests": results}
 
 
+# ==============================================================================
+# IMAGE PROXY DISK CACHE & PERSISTENT POOL (Ultra-Low Latency 4K Pipeline)
+# ==============================================================================
+_IMAGE_CACHE_DIR = os.path.join(DATA_DIR, "cache", "images")
+os.makedirs(_IMAGE_CACHE_DIR, exist_ok=True)
+
+_IMAGE_PROXY_CLIENT: Optional[httpx.AsyncClient] = None
+_INFLIGHT_PROXY_EVENTS: Dict[str, asyncio.Event] = {}
+_PREWARM_PAUSE_UNTIL: float = 0.0
+
+def signal_user_interaction(duration_seconds: float = 1.5):
+    """Pausa qualquer download de pré-aquecimento em background para dar 100% de prioridade ao usuário."""
+    global _PREWARM_PAUSE_UNTIL
+    _PREWARM_PAUSE_UNTIL = max(_PREWARM_PAUSE_UNTIL, time.time() + duration_seconds)
+
+def get_image_proxy_client() -> httpx.AsyncClient:
+    global _IMAGE_PROXY_CLIENT
+    if _IMAGE_PROXY_CLIENT is None or _IMAGE_PROXY_CLIENT.is_closed:
+        limits = httpx.Limits(max_keepalive_connections=50, max_connections=100, keepalive_expiry=60.0)
+        timeout = httpx.Timeout(20.0, connect=8.0)
+        _IMAGE_PROXY_CLIENT = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
+    return _IMAGE_PROXY_CLIENT
+
+
+def _build_thumb_response(tbytes: bytes, url_hash: str, target_w: int, if_none_match: Optional[str], cache_status: str) -> Response:
+    etag = f'"{url_hash}_w{target_w}"'
+    if if_none_match == etag:
+        return Response(status_code=304)
+    return Response(
+        content=tbytes,
+        media_type="image/webp",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": etag,
+            "X-Cache-Status": cache_status,
+        }
+    )
+
+
+def _build_orig_response(raw_bytes: bytes, url_hash: str, media_type: str, if_none_match: Optional[str], cache_status: str, etag_val: Optional[str] = None) -> Response:
+    etag = etag_val or f'"{url_hash}"'
+    if if_none_match == etag:
+        return Response(status_code=304)
+    return Response(
+        content=raw_bytes,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": etag,
+            "X-Cache-Status": cache_status,
+        }
+    )
+
+
+def _generate_thumbnail_webp_sync(raw_bytes: bytes, target_width: int) -> Optional[bytes]:
+    """Synchronous worker for high-performance thumbnail resizing outside the asyncio event loop."""
+    try:
+        from PIL import Image as PILImage, ImageFile as PILImageFile
+        PILImageFile.LOAD_TRUNCATED_IMAGES = True
+        with PILImage.open(io.BytesIO(raw_bytes)) as pim:
+            if pim.width <= target_width:
+                # Se a imagem já é menor ou igual à largura de destino (ex: thumbnail de CDN),
+                # evita recompressão redundante que sobrecarrega a CPU em álbuns grandes (500+ fotos)
+                return raw_bytes
+            ratio = float(target_width) / float(pim.width)
+            new_h = max(1, int(float(pim.height) * ratio))
+            # Bilinear/Box é até 3x mais rápido que Lanczos para downscale de miniaturas
+            resample_filter = getattr(PILImage.Resampling, "BILINEAR", getattr(PILImage, "BILINEAR", 2))
+            t_im = pim.resize((target_width, new_h), resample=resample_filter)
+            t_buf = io.BytesIO()
+            t_im.save(t_buf, format="WEBP", quality=80)
+            return t_buf.getvalue()
+    except Exception as ethumb:
+        logger.debug(f"Thumbnail downsample fallback: {ethumb}")
+        return None
+
+
 @app.get("/api/proxy-image")
-async def proxy_image(url: str = Query(..., description="Target image URL to proxy"), referer: Optional[str] = None):
+async def proxy_image(
+    request: Request,
+    url: str = Query(..., description="Target image URL to proxy"),
+    referer: Optional[str] = None,
+    w: Optional[int] = Query(None, description="Width to downsample thumbnail for instant mobile delivery")
+):
     """
     Proxies image requests with custom User-Agent and Referer headers
     to bypass CDN hotlinking and CORS restrictions in the web browser.
+    Includes persistent on-disk caching (SHA-256) and HTTP 304 conditional cache.
     """
     # Suporte a imagens salvas localmente via Upload Manual
     if url.startswith("local://albums/"):
@@ -950,44 +1252,215 @@ async def proxy_image(url: str = Query(..., description="Target image URL to pro
         if os.path.exists(local_full):
             import mimetypes
             mt, _ = mimetypes.guess_type(local_full)
+            mtime = os.path.getmtime(local_full)
+            etag = f'W/"{int(mtime)}-{os.path.getsize(local_full)}"'
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304)
+            resp_headers = {
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "ETag": etag,
+            }
             with open(local_full, "rb") as f:
-                return Response(content=f.read(), media_type=mt or "image/jpeg")
-        raise HTTPException(status_code=404, detail="Imagem local não encontrada")
+                return Response(content=f.read(), media_type=mt or "image/jpeg", headers=resp_headers)
+        raise HTTPException(status_code=404, detail="Local image not found")
 
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    }
-    if referer:
-        headers["Referer"] = referer
-    else:
-        headers["Referer"] = url
+    # Qualquer requisição interativa que chega sinaliza preempção ao background worker
+    signal_user_interaction(1.5)
+
+    # 1. Verifica cache local persistente em disco (SHA-256)
+    import hashlib
+    url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    target_w = w if isinstance(w, int) and w > 0 else None
+    cache_thumb_bin = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}_w{target_w}.webp") if target_w else None
+    cache_bin = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.bin")
+    cache_meta = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.meta.json")
+    if_none_match = request.headers.get("if-none-match")
+
+    # 1.1 Se solicitou miniatura redimensionada, verifica cache de thumbnail pronto
+    if target_w and os.path.exists(cache_thumb_bin):
+        try:
+            with open(cache_thumb_bin, "rb") as tbf:
+                return _build_thumb_response(tbf.read(), url_hash, target_w, if_none_match, "HIT-THUMB")
+        except Exception:
+            pass
+
+    # 1.2 Se a imagem original existe em cache no disco, serve instantaneamente (0ms de rede)
+    if os.path.exists(cache_bin) and os.path.exists(cache_meta):
+        try:
+            with open(cache_meta, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+            with open(cache_bin, "rb") as bf:
+                raw_bytes = bf.read()
+
+            # Se solicitou miniatura e ainda não estava em cache_thumb_bin, gera a partir do original em cache
+            if target_w:
+                thumb_bytes = await asyncio.to_thread(_generate_thumbnail_webp_sync, raw_bytes, target_w)
+                if thumb_bytes:
+                    try:
+                        with open(cache_thumb_bin, "wb") as tbf:
+                            tbf.write(thumb_bytes)
+                    except Exception:
+                        pass
+                    return _build_thumb_response(thumb_bytes, url_hash, target_w, if_none_match, "HIT-GENERATED-THUMB")
+
+            return _build_orig_response(raw_bytes, url_hash, meta.get("media_type", "image/jpeg"), if_none_match, "HIT", meta.get("etag"))
+        except Exception as e:
+            logger.warning(f"[ProxyImage Cache] Falha ao ler cache {url_hash}: {e}")
+
+    # 2. In-Flight Request Coalescing (Single-Flight Pattern)
+    # Se outra requisição concorrente já está baixando esse exato URL remoto, aguarda a conclusão dela
+    while url_hash in _INFLIGHT_PROXY_EVENTS:
+        existing_event = _INFLIGHT_PROXY_EVENTS[url_hash]
+        try:
+            await asyncio.wait_for(existing_event.wait(), timeout=35.0)
+        except asyncio.TimeoutError:
+            break
+
+        # Ao acordar, a imagem já foi salva no cache de disco pelo download concluído!
+        if target_w and os.path.exists(cache_thumb_bin):
+            try:
+                with open(cache_thumb_bin, "rb") as tbf:
+                    return _build_thumb_response(tbf.read(), url_hash, target_w, if_none_match, "HIT-COALESCED-THUMB")
+            except Exception:
+                pass
+
+        if os.path.exists(cache_bin) and os.path.exists(cache_meta):
+            try:
+                with open(cache_meta, "r", encoding="utf-8") as mf:
+                    meta = json.load(mf)
+                with open(cache_bin, "rb") as bf:
+                    raw_bytes = bf.read()
+                if target_w:
+                    thumb_bytes = await asyncio.to_thread(_generate_thumbnail_webp_sync, raw_bytes, target_w)
+                    if thumb_bytes:
+                        try:
+                            with open(cache_thumb_bin, "wb") as tbf:
+                                tbf.write(thumb_bytes)
+                        except Exception:
+                            pass
+                        return _build_thumb_response(thumb_bytes, url_hash, target_w, if_none_match, "HIT-COALESCED-GENERATED-THUMB")
+                return _build_orig_response(raw_bytes, url_hash, meta.get("media_type", "image/jpeg"), if_none_match, "HIT-COALESCED", meta.get("etag"))
+            except Exception:
+                pass
+        break
+
+    # 3. Este corrotina é o único baixador designado deste URL
+    in_flight_event = asyncio.Event()
+    _INFLIGHT_PROXY_EVENTS[url_hash] = in_flight_event
+
+    headers = resolve_anti_hotlink_headers(url, referer=referer)
+    client = get_image_proxy_client()
 
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            res = await client.get(url, headers=headers)
-            if res.status_code == 200:
-                raw_bytes = res.content
-                media_type = res.headers.get("content-type", "").lower()
-                # Correct MIME type sniffing for animations
-                if raw_bytes.startswith((b'GIF87a', b'GIF89a')) or url.lower().endswith(".gif"):
-                    media_type = "image/gif"
-                elif b'WEBP' in raw_bytes[:32] or url.lower().endswith(".webp"):
-                    media_type = "image/webp"
-                elif not media_type or "octet-stream" in media_type:
-                    media_type = "image/jpeg"
+        res = await client.get(url, headers=headers)
+        if res.status_code == 200:
+            raw_bytes = res.content
+            # Detecção Semântica e Física Agnóstica de Bloqueio de Hotlink
+            generic_err_sigs = (
+                b"hotlink", b"hot-link", b"hotlinking",
+                b"access denied", b"forbidden", b"unauthorized",
+                b"embed image", b"direct linking", b"bandwidth limit",
+                b"not allowed"
+            )
+            is_hotlink_err = len(raw_bytes) < 25000 and any(sig in raw_bytes[:8192].lower() for sig in generic_err_sigs)
+            if not is_hotlink_err and len(raw_bytes) < 25000:
+                try:
+                    from PIL import Image as PILImage
+                    with PILImage.open(io.BytesIO(raw_bytes)) as pim:
+                        if pim.size in [(400, 300), (300, 250), (450, 300)]:
+                            is_hotlink_err = True
+                except Exception:
+                    pass
 
-                resp_headers = {
-                    "Cache-Control": "public, max-age=604800, stale-while-revalidate=86400",
-                }
-                if res.headers.get("etag"):
-                    resp_headers["ETag"] = res.headers["etag"]
-                return Response(content=raw_bytes, media_type=media_type, headers=resp_headers)
-            raise HTTPException(status_code=res.status_code, detail="Remote server error")
+            if is_hotlink_err:
+                logger.warning(f"[ProxyImage] Bloqueio de hotlink detectado para {url}. Tentando fallbacks universais...")
+                parsed_m = urllib.parse.urlparse(url)
+                media_apex = get_apex_domain(parsed_m.netloc)
+                media_origin = f"{parsed_m.scheme}://{media_apex}"
+
+                fallbacks = [
+                    {"Referer": f"{media_origin}/", "Origin": media_origin, "Sec-Fetch-Site": "same-origin"},
+                    {"Sec-Fetch-Site": "none"},
+                    {"Referer": f"{parsed_m.scheme}://{parsed_m.netloc}/", "Origin": f"{parsed_m.scheme}://{parsed_m.netloc}"}
+                ]
+                for alt_hdrs in fallbacks:
+                    try:
+                        retry_hdrs = dict(headers)
+                        if "Referer" not in alt_hdrs and "Referer" in retry_hdrs:
+                            del retry_hdrs["Referer"]
+                            retry_hdrs.pop("Origin", None)
+                        retry_hdrs.update(alt_hdrs)
+                        res_retry = await client.get(url, headers=retry_hdrs)
+                        if res_retry.status_code == 200:
+                            raw_retry = res_retry.content
+                            retry_lead = raw_retry[:8192].lower()
+                            retry_is_err = len(raw_retry) < 25000 and any(sig in retry_lead for sig in generic_err_sigs)
+                            if not retry_is_err and len(raw_retry) < 25000:
+                                try:
+                                    from PIL import Image as PILImage
+                                    with PILImage.open(io.BytesIO(raw_retry)) as pim:
+                                        if pim.size in [(400, 300), (300, 250)]:
+                                            retry_is_err = True
+                                except Exception:
+                                    pass
+                            if not retry_is_err and len(raw_retry) > 1000:
+                                raw_bytes = raw_retry
+                                res = res_retry
+                                is_hotlink_err = False
+                                logger.info(f"[ProxyImage] Anti-hotlink recovery successful via fallback: {alt_hdrs.get('Referer', 'no-referer')}")
+                                break
+                    except Exception as eret:
+                        logger.debug(f"[ProxyImage] Fallback falhou: {eret}")
+
+            if is_hotlink_err:
+                raise HTTPException(status_code=403, detail="Bloqueio de hotlink do provedor remoto ativo")
+            media_type = res.headers.get("content-type", "").lower()
+            if raw_bytes.startswith((b'GIF87a', b'GIF89a')) or url.lower().endswith(".gif"):
+                media_type = "image/gif"
+            elif b'WEBP' in raw_bytes[:32] or url.lower().endswith(".webp"):
+                media_type = "image/webp"
+            elif not media_type or "octet-stream" in media_type:
+                media_type = "image/jpeg"
+
+            # Grava a imagem ORIGINAL integra no cache_bin (sem truncamento/sem redimensionar o original)
+            etag = res.headers.get("etag") or f'"{url_hash}"'
+            if not is_hotlink_err:
+                try:
+                    os.makedirs(_IMAGE_CACHE_DIR, exist_ok=True)
+                    temp_bin = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.tmp")
+                    with open(temp_bin, "wb") as bf:
+                        bf.write(raw_bytes)
+                    os.replace(temp_bin, cache_bin)
+
+                    with open(cache_meta, "w", encoding="utf-8") as mf:
+                        json.dump({"media_type": media_type, "etag": etag, "created_at": time.time()}, mf)
+                except Exception as ce:
+                    logger.warning(f"[ProxyImage Cache] Erro ao gravar cache para {url_hash}: {ce}")
+
+            # Se solicitou miniatura, redimensiona via worker assincrono sem bloquear o event loop
+            if target_w and len(raw_bytes) > 100:
+                thumb_bytes = await asyncio.to_thread(_generate_thumbnail_webp_sync, raw_bytes, target_w)
+                if thumb_bytes:
+                    try:
+                        with open(cache_thumb_bin, "wb") as tbf:
+                            tbf.write(thumb_bytes)
+                    except Exception:
+                        pass
+                    return _build_thumb_response(thumb_bytes, url_hash, target_w, if_none_match, "MISS-THUMB")
+
+            return _build_orig_response(raw_bytes, url_hash, media_type, if_none_match, "MISS", etag)
+        raise HTTPException(status_code=res.status_code, detail="Remote server error")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy error: {str(e)}")
+    finally:
+        in_flight_event.set()
+        _INFLIGHT_PROXY_EVENTS.pop(url_hash, None)
+
 
 
 @app.get("/api/download-image")
@@ -1002,29 +1475,321 @@ async def download_single_image(
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    }
-    if referer:
-        headers["Referer"] = referer
+    # Verifica se já está no cache local em disco (SHA-256)
+    import hashlib
+    url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    cache_bin = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.bin")
+    cache_meta = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.meta.json")
+
+    fname = filename or url.split("/")[-1].split("?")[0] or "photo.jpg"
+    clean_fname = _sanitize_filename(fname)
+    if not any(clean_fname.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".avif"]):
+        clean_fname += ".jpg"
+
+    if os.path.exists(cache_bin) and os.path.isfile(cache_bin):
+        try:
+            with open(cache_bin, "rb") as cf:
+                cached_bytes = cf.read()
+            media_type = "image/jpeg"
+            if os.path.exists(cache_meta):
+                try:
+                    with open(cache_meta, "r", encoding="utf-8") as mf:
+                        media_type = json.load(mf).get("media_type", "image/jpeg")
+                except Exception:
+                    pass
+            return Response(
+                content=cached_bytes,
+                media_type=media_type,
+                headers={"Content-Disposition": f'attachment; filename="{clean_fname}"'}
+            )
+        except Exception:
+            pass
+
+    headers = resolve_anti_hotlink_headers(url, referer=referer)
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             res = await client.get(url, headers=headers)
             if res.status_code == 200:
                 media_type = res.headers.get("content-type", "image/jpeg")
-                fname = filename or url.split("/")[-1].split("?")[0] or "photo.jpg"
-                clean_fname = _sanitize_filename(fname)
-                if not any(clean_fname.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".avif"]):
-                    clean_fname += ".jpg"
                 return Response(
                     content=res.content,
                     media_type=media_type,
                     headers={"Content-Disposition": f'attachment; filename="{clean_fname}"'}
                 )
             raise HTTPException(status_code=res.status_code, detail="Failed to fetch image from host")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class DownloadToDiskRequest(BaseModel):
+    url: str
+    filename: Optional[str] = None
+    open_folder: Optional[bool] = False
+
+
+def _get_downloads_dir() -> str:
+    r"""
+    Returns the user's default Downloads directory across Windows, macOS, and Linux.
+    On Windows: uses shell32.SHGetKnownFolderPath (FOLDERID_Downloads) with OneDrive fallback.
+    On Linux: honors XDG_DOWNLOAD_DIR / xdg-user-dir with ~/Downloads fallback.
+    On macOS: uses ~/Downloads fallback.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class GUID(ctypes.Structure):
+                _fields_ = [
+                    ("Data1", wintypes.DWORD),
+                    ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD),
+                    ("Data4", ctypes.c_byte * 8)
+                ]
+            # FOLDERID_Downloads: {374DE290-123F-4565-9164-39C4925E467B}
+            FOLDERID_Downloads = GUID(0x374DE290, 0x123F, 0x4565, (ctypes.c_byte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B))
+            path_ptr = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(FOLDERID_Downloads), 0, None, ctypes.byref(path_ptr)) == 0:
+                p = path_ptr.value
+                ctypes.windll.ole32.CoTaskMemFree(path_ptr)
+                if p and os.path.exists(p):
+                    return p
+        except Exception:
+            pass
+
+        user_prof = os.environ.get("USERPROFILE")
+        if user_prof:
+            std_dl = os.path.join(user_prof, "Downloads")
+            if os.path.exists(std_dl):
+                return std_dl
+            one_drive_dl = os.path.join(user_prof, "OneDrive", "Downloads")
+            if os.path.exists(one_drive_dl):
+                return one_drive_dl
+
+    # Linux XDG Resolution
+    if sys.platform.startswith("linux"):
+        xdg_dl = os.environ.get("XDG_DOWNLOAD_DIR")
+        if xdg_dl and os.path.exists(xdg_dl):
+            return xdg_dl
+        try:
+            out = subprocess.check_output(["xdg-user-dir", "DOWNLOAD"], text=True, stderr=subprocess.DEVNULL).strip()
+            if out and os.path.exists(out):
+                return out
+        except Exception:
+            pass
+
+    home_dl = os.path.join(os.path.expanduser("~"), "Downloads")
+    if os.path.exists(home_dl):
+        return home_dl
+    return os.path.expanduser("~")
+
+
+def _get_unique_download_path(filename: str, fallback_ext: str = ".jpg") -> str:
+    """Generates an incremental unique filename in the user's Downloads directory with guaranteed valid extension."""
+    dl_dir = _get_downloads_dir()
+    os.makedirs(dl_dir, exist_ok=True)
+
+    clean_name = _sanitize_filename(filename, default_ext=fallback_ext)
+    base, ext = os.path.splitext(clean_name)
+    if not ext or len(ext) > 6:
+        ext = fallback_ext if fallback_ext.startswith(".") else f".{fallback_ext}"
+        clean_name = f"{base}{ext}"
+
+    target = os.path.join(dl_dir, clean_name)
+    counter = 1
+    while os.path.exists(target):
+        clean_name = f"{base} ({counter}){ext}"
+        target = os.path.join(dl_dir, clean_name)
+        counter += 1
+    return target
+
+
+def _reveal_in_explorer(file_path: str):
+    """Safely reveals file in system file manager across Windows, macOS, and Linux."""
+    if not os.path.exists(file_path):
+        return
+    try:
+        norm_path = os.path.normpath(file_path)
+        if sys.platform == "win32":
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen(["explorer.exe", f"/select,{norm_path}"], creationflags=flags)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", norm_path])
+        elif sys.platform.startswith("linux"):
+            parent = os.path.dirname(norm_path)
+            subprocess.Popen(["xdg-open", parent])
+    except Exception:
+        pass
+
+
+@app.post("/api/system/download-to-disk")
+async def download_to_disk_endpoint(req: DownloadToDiskRequest):
+    """
+    Downloads or copies an image, video, or ZIP archive directly to the user's
+    local Windows Downloads folder with guaranteed file extension and instant cache reuse.
+    """
+    if not req.url:
+        raise HTTPException(status_code=400, detail="URL is required.")
+
+    # 1. Caso Especial: Download direto de ZIP de Álbum
+    if "/api/albums/" in req.url and "download-zip" in req.url:
+        m = re.search(r"/api/albums/([^/?]+)/download-zip", req.url)
+        if not m:
+            raise HTTPException(status_code=400, detail="Invalid album URL.")
+        session_id = m.group(1)
+        if session_id not in _completed_albums:
+            _load_albums_from_disk()
+        if session_id not in _completed_albums:
+            raise HTTPException(status_code=404, detail="Album not found.")
+        album = _completed_albums[session_id]
+
+        parsed_q = urllib.parse.parse_qs(urllib.parse.urlparse(req.url).query)
+        remove_exif = parsed_q.get("remove_exif", ["false"])[0].lower() == "true"
+        naming_pattern = parsed_q.get("naming_pattern", [None])[0]
+
+        from .safe_downloader import safe_downloader
+        temp_zip = await safe_downloader.create_safe_zip(album, remove_exif, naming_pattern)
+
+        clean_title = _sanitize_filename(album.original_title or album.title or f"album_{session_id}")
+        zip_filename = req.filename or f"{clean_title}.zip"
+        target_path = _get_unique_download_path(zip_filename, fallback_ext=".zip")
+        try:
+            shutil.copy2(temp_zip, target_path)
+            try:
+                os.remove(temp_zip)
+            except Exception:
+                pass
+        except Exception:
+            shutil.move(temp_zip, target_path)
+
+        if req.open_folder:
+            _reveal_in_explorer(target_path)
+
+        return {"success": True, "file_path": target_path, "filename": os.path.basename(target_path)}
+
+    # Extrai a URL real caso tenha vindo encapsulada em /api/proxy-image ou /api/proxy-video-stream
+    actual_url = req.url
+    actual_referer = None
+    if "/api/proxy-video-stream" in req.url or "/api/proxy-image" in req.url:
+        parsed_p = urllib.parse.parse_qs(urllib.parse.urlparse(req.url).query)
+        if "url" in parsed_p:
+            actual_url = parsed_p["url"][0]
+        if "referer" in parsed_p:
+            actual_referer = parsed_p["referer"][0]
+        if "filename" in parsed_p and not req.filename:
+            req.filename = parsed_p["filename"][0]
+
+    # 2. Caso Especial: Arquivo local em disco (ex: local://albums/..., data/videos/...)
+    url_clean = actual_url.replace("\\", "/")
+    if url_clean.startswith("local://") or "data/albums/" in url_clean or "data/videos/" in url_clean:
+        rel_path = url_clean.replace("local://albums/", "albums/").replace("local://videos/", "videos/").replace("local://", "")
+        if rel_path.startswith("data/"):
+            rel_path = rel_path[5:]
+        local_full = os.path.join(DATA_DIR, rel_path.replace("/", os.sep))
+        if not os.path.exists(local_full) and os.path.exists(os.path.join(DATA_DIR, "albums", rel_path.replace("/", os.sep))):
+            local_full = os.path.join(DATA_DIR, "albums", rel_path.replace("/", os.sep))
+        if not os.path.exists(local_full) and os.path.exists(os.path.join(DATA_DIR, "videos", rel_path.replace("/", os.sep))):
+            local_full = os.path.join(DATA_DIR, "videos", rel_path.replace("/", os.sep))
+
+        if os.path.exists(local_full) and os.path.isfile(local_full):
+            magic_bytes = b""
+            try:
+                with open(local_full, "rb") as test_f:
+                    magic_bytes = test_f.read(32)
+            except Exception:
+                pass
+            detected_ext = _infer_extension_from_magic_or_mime(raw_bytes=magic_bytes)
+            target_filename = req.filename or os.path.basename(local_full)
+            target_path = _get_unique_download_path(target_filename, fallback_ext=detected_ext)
+            shutil.copy2(local_full, target_path)
+            if req.open_folder:
+                _reveal_in_explorer(target_path)
+            return {"success": True, "file_path": target_path, "filename": os.path.basename(target_path)}
+
+    # 3. Caso Especial: O arquivo já foi baixado e está no Cache Local em Disco (_IMAGE_CACHE_DIR)!
+    import hashlib
+    url_hash = hashlib.sha256(actual_url.encode("utf-8")).hexdigest()
+    cache_bin = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.bin")
+    cache_meta = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.meta.json")
+
+    if os.path.exists(cache_bin) and os.path.isfile(cache_bin):
+        try:
+            with open(cache_bin, "rb") as cf:
+                magic_bytes = cf.read(32)
+            meta_media_type = ""
+            if os.path.exists(cache_meta):
+                try:
+                    with open(cache_meta, "r", encoding="utf-8") as mf:
+                        meta_media_type = json.load(mf).get("media_type", "")
+                except Exception:
+                    pass
+            detected_ext = _infer_extension_from_magic_or_mime(raw_bytes=magic_bytes, content_type=meta_media_type)
+            fname = req.filename or f"foto_{url_hash[:10]}{detected_ext}"
+            target_path = _get_unique_download_path(fname, fallback_ext=detected_ext)
+            shutil.copy2(cache_bin, target_path)
+            if req.open_folder:
+                _reveal_in_explorer(target_path)
+            return {"success": True, "file_path": target_path, "filename": os.path.basename(target_path)}
+        except Exception as cache_err:
+            logger.warning(f"[download_to_disk] Erro ao copiar do cache: {cache_err}")
+
+    # 4. Caso Geral: Mídia remota (fetch e gravação com streaming e extensão garantida)
+    headers = resolve_anti_hotlink_headers(actual_url, referer=actual_referer)
+    client = get_image_proxy_client()
+
+    try:
+        async with client.stream("GET", actual_url, headers=headers) as resp:
+            if resp.status_code not in (200, 206):
+                raise HTTPException(status_code=resp.status_code, detail="Servidor remoto rejeitou o download.")
+
+            content_type = resp.headers.get("content-type", "")
+
+            chunk_iter = resp.aiter_bytes(chunk_size=65536)
+            first_chunk = b""
+            try:
+                first_chunk = await chunk_iter.__anext__()
+            except StopAsyncIteration:
+                pass
+
+            detected_ext = _infer_extension_from_magic_or_mime(raw_bytes=first_chunk, content_type=content_type)
+
+            fname = req.filename
+            if not fname:
+                cd = resp.headers.get("content-disposition", "")
+                if "filename=" in cd:
+                    fname = cd.split("filename=")[-1].strip('"\' ')
+                else:
+                    url_leaf = actual_url.split("/")[-1].split("?")[0]
+                    fname = url_leaf if (url_leaf and "." in url_leaf) else f"imagem{detected_ext}"
+
+            target_path = _get_unique_download_path(fname, fallback_ext=detected_ext)
+
+            with open(target_path, "wb") as f_out:
+                if first_chunk:
+                    f_out.write(first_chunk)
+                async for chunk in chunk_iter:
+                    f_out.write(chunk)
+
+            # Também salva no cache local para acelerar visualizações futuras
+            try:
+                if not os.path.exists(cache_bin) and os.path.getsize(target_path) < 50 * 1024 * 1024:
+                    shutil.copy2(target_path, cache_bin)
+                    with open(cache_meta, "w", encoding="utf-8") as mf:
+                        json.dump({"media_type": content_type, "etag": f'"{url_hash}"', "created_at": time.time()}, mf)
+            except Exception:
+                pass
+
+            if req.open_folder:
+                _reveal_in_explorer(target_path)
+
+            return {"success": True, "file_path": target_path, "filename": os.path.basename(target_path)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro no download_to_disk: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo: {str(e)}")
 
 
 _DOMAIN_COOKIES_FILE = os.path.join(DATA_DIR, "domain_cookies.json")
@@ -1543,9 +2308,9 @@ async def get_models():
     """Discovers models installed locally in Ollama and lists available Gemini cloud models."""
     local_data = await LLMAdapter.get_available_local_models()
     gemini_models = [
-        {"name": "gemini-3.7-flash", "label": "Gemini 3.7 Flash (Recomendado / Mais Rápido)", "provider": "gemini"},
-        {"name": "gemini-2.0-flash", "label": "Gemini 2.0 Flash (Alta Precisão)", "provider": "gemini"},
-        {"name": "gemini-2.0-pro-exp-02-05", "label": "Gemini 2.0 Pro (Raciocínio Profundo)", "provider": "gemini"},
+        {"name": "gemini-3.7-flash", "label": "Gemini 3.7 Flash (Recommended / Fastest)", "provider": "gemini"},
+        {"name": "gemini-2.0-flash", "label": "Gemini 2.0 Flash (High Precision)", "provider": "gemini"},
+        {"name": "gemini-2.0-pro-exp-02-05", "label": "Gemini 2.0 Pro (Deep Reasoning)", "provider": "gemini"},
     ]
     if isinstance(local_data, dict):
         local_data["gemini_models"] = gemini_models
@@ -1598,7 +2363,7 @@ async def export_album_json(session_id: str):
     album_name = _sanitize_filename(album.original_title or album.title or f"album_{session_id}")
     filename = f"{album_name}.json"
 
-    json_str = json.dumps(album.model_dump(), indent=2, ensure_ascii=False)
+    json_str = json.dumps(album.model_dump() if hasattr(album, "model_dump") else album.dict(), indent=2, ensure_ascii=False)
     return Response(
         content=json_str.encode("utf-8"),
         media_type="application/json",
@@ -1886,7 +2651,7 @@ async def create_album_folder(req: CreateAlbumFolderRequest):
     """Creates a new album folder."""
     clean = req.name.strip()
     if not clean:
-        raise HTTPException(status_code=400, detail="Nome da pasta não pode ser vazio.")
+        raise HTTPException(status_code=400, detail="Folder name cannot be empty.")
     _ensure_album_folder_exists(clean)
     folders, total = _get_all_album_folders_with_counts()
     return {"success": True, "folders": folders, "total_albums": total}
@@ -1898,9 +2663,9 @@ async def rename_album_folder(req: RenameAlbumFolderRequest):
     old_name = req.old_name.strip()
     new_name = req.new_name.strip()
     if not old_name or not new_name:
-        raise HTTPException(status_code=400, detail="Nomes antigo e novo são obrigatórios.")
+        raise HTTPException(status_code=400, detail="Old and new names are required.")
     if old_name.lower() == "geral":
-        raise HTTPException(status_code=400, detail="A pasta 'Geral' não pode ser renomeada.")
+        raise HTTPException(status_code=400, detail="The 'General' folder cannot be renamed.")
 
     custom = _load_custom_album_folders()
     custom = [new_name if f == old_name else f for f in custom]
@@ -1926,9 +2691,9 @@ async def delete_album_folder(req: DeleteAlbumFolderRequest):
     """Deletes an album folder and moves any albums in it back to 'Geral'."""
     folder_name = req.name.strip()
     if not folder_name:
-        raise HTTPException(status_code=400, detail="Nome da pasta é obrigatório.")
+        raise HTTPException(status_code=400, detail="Folder name is required.")
     if folder_name.lower() == "geral":
-        raise HTTPException(status_code=400, detail="A pasta 'Geral' não pode ser excluída.")
+        raise HTTPException(status_code=400, detail="The 'General' folder cannot be deleted.")
 
     custom = _load_custom_album_folders()
     custom = [f for f in custom if f != folder_name]
@@ -1952,7 +2717,7 @@ async def move_albums(req: MoveAlbumsRequest):
     """Moves one or more albums to a target folder."""
     target = req.target_folder.strip() or "Geral"
     if not req.album_ids:
-        raise HTTPException(status_code=400, detail="Nenhum álbum selecionado.")
+        raise HTTPException(status_code=400, detail="No albums selected.")
     _ensure_album_folder_exists(target)
 
     _load_albums_from_disk()
@@ -2012,7 +2777,7 @@ async def get_ollama_status(url: Optional[str] = "http://localhost:11434"):
                     "endpoint": clean_url,
                     "installed_models": [],
                     "latency_ms": latency_ms,
-                    "error": f"Serviço na porta não é Ollama (HTTP {v_res.status_code})"
+                    "error": f"Service on port is not Ollama (HTTP {v_res.status_code})"
                 }
 
             return {
@@ -2129,8 +2894,8 @@ async def chat_api(req: ChatRequest):
                     data = resp.json()
                     reply = data.get("message", {}).get("content", "")
                     if reply:
-                        return {"reply": reply, "provider": "ollama", "model": target_model}
-                    return {"reply": "O modelo local respondeu sem conteúdo de texto.", "provider": "ollama", "model": target_model}
+                        return {"reply": reply, "provider": "ollama", "model": target_model, "media_items": [], "executed_tools": [], "thought_chain": [], "client_action": None}
+                    return {"reply": "The local model responded without text content.", "provider": "ollama", "model": target_model, "media_items": [], "executed_tools": [], "thought_chain": [], "client_action": None}
                 elif resp.status_code == 404:
                     # Fallback to legacy /api/generate
                     gen_resp = await client.post(
@@ -2145,8 +2910,8 @@ async def chat_api(req: ChatRequest):
                     if gen_resp.status_code == 200:
                         reply = gen_resp.json().get("response", "")
                         if reply:
-                            return {"reply": reply, "provider": "ollama", "model": target_model}
-                        return {"reply": "O modelo local respondeu sem conteúdo de texto.", "provider": "ollama", "model": target_model}
+                            return {"reply": reply, "provider": "ollama", "model": target_model, "media_items": [], "executed_tools": [], "thought_chain": [], "client_action": None}
+                        return {"reply": "The local model responded without text content.", "provider": "ollama", "model": target_model, "media_items": [], "executed_tools": [], "thought_chain": [], "client_action": None}
 
                 # HTTP error from Ollama
                 err_text = resp.text[:120] if resp else "desconhecido"
@@ -2155,7 +2920,11 @@ async def chat_api(req: ChatRequest):
                     "provider": "ollama",
                     "model": target_model,
                     "error_type": "ollama_model_error",
-                    "can_fallback": True
+                    "can_fallback": True,
+                    "media_items": [],
+                    "executed_tools": [],
+                    "thought_chain": [],
+                    "client_action": None
                 }
         except Exception as e:
             logger.warning(f"Ollama local chat connection error: {e}")
@@ -2164,10 +2933,14 @@ async def chat_api(req: ChatRequest):
                 "provider": "ollama",
                 "model": target_model,
                 "error_type": "ollama_offline",
-                "can_fallback": True
+                "can_fallback": True,
+                "media_items": [],
+                "executed_tools": [],
+                "thought_chain": [],
+                "client_action": None
             }
 
-    # --- Mode 2: Google Gemini Cloud ---
+    # --- Mode 2: Google Gemini Cloud with Full Autonomous Tool Suite ---
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not gemini_key:
         return {
@@ -2175,100 +2948,56 @@ async def chat_api(req: ChatRequest):
             "provider": "gemini",
             "model": req.model or "gemini-3.7-flash",
             "error_type": "no_api_key",
-            "can_fallback": True
+            "can_fallback": True,
+            "media_items": [],
+            "executed_tools": [],
+            "thought_chain": [],
+            "client_action": None
         }
 
-    gemini_model = req.model or "gemini-3.7-flash"
-    # Sanitize cross-provider model leakage
-    if any(k in gemini_model.lower() for k in ["llama", "qwen", "deepseek", "mistral"]):
-        gemini_model = "gemini-3.7-flash"
+    # Synchronize server context into the CopilotMasterAgent
+    try:
+        from src.agent.copilot_master_agent import copilot_master_agent, set_runtime_context
+        set_runtime_context({
+            "completed_albums": _completed_albums,
+            "load_albums_from_disk": _load_albums_from_disk,
+            "save_album_to_disk": _save_album_to_disk,
+            "get_all_album_folders_with_counts": _get_all_album_folders_with_counts,
+            "load_custom_album_folders": _load_custom_album_folders,
+            "save_custom_album_folders": _save_custom_album_folders,
+            "video_service": video_service,
+            "trash_service": trash_service,
+            "active_jobs": _active_jobs,
+            "job_controllers": _job_controllers,
+            "save_jobs_to_disk": _save_jobs_to_disk,
+            "resolve_best_video_stream": _resolve_best_video_stream,
+        })
+    except Exception as e_ctx:
+        logger.warning(f"Could not update copilot agent context: {e_ctx}")
 
     try:
-        # Format turns with strict Gemini REST API validation:
-        # 1. First turn MUST be role 'user'
-        # 2. Roles must strictly alternate (user -> model -> user -> model)
-        raw_turns = []
-        if req.conversation_history:
-            for m in req.conversation_history[-6:]:
-                role = "model" if m.get("role") in ("agent", "assistant") else "user"
-                content_text = m.get("content") or m.get("text") or ""
-                if content_text:
-                    raw_turns.append((role, content_text))
-        raw_turns.append(("user", req.message))
-
-        # Drop leading 'model' turns so conversation starts with user turn
-        while raw_turns and raw_turns[0][0] != "user":
-            raw_turns.pop(0)
-
-        # Merge consecutive turns of the same role
-        merged_turns = []
-        for role, text in raw_turns:
-            if merged_turns and merged_turns[-1][0] == role:
-                merged_turns[-1] = (role, merged_turns[-1][1] + "\n\n" + text)
-            else:
-                merged_turns.append((role, text))
-
-        contents = [{"role": r, "parts": [{"text": t}]} for r, t in merged_turns]
-        if not contents:
-            contents = [{"role": "user", "parts": [{"text": req.message}]}]
-
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={gemini_key}"
-            payload = {
-                "systemInstruction": {
-                    "parts": [{"text": "Você é o Agente Co-Pilot IMAGEX.AI. Responda sempre em português de forma concisa, inteligente e focada na extração e organização de álbuns de fotos e vídeos."}]
-                },
-                "contents": contents
-            }
-            resp = await client.post(url, headers={"Content-Type": "application/json"}, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        text_reply = parts[0].get("text", "")
-                        if text_reply:
-                            return {"reply": text_reply, "provider": "gemini", "model": gemini_model}
-                    finish_reason = candidates[0].get("finishReason", "UNKNOWN")
-                    return {
-                        "reply": f"A resposta foi finalizada sem texto pelo modelo ({finish_reason}). Tente reformular sua pergunta.",
-                        "provider": "gemini",
-                        "model": gemini_model,
-                        "error_type": "gemini_safety",
-                        "can_fallback": True
-                    }
-
-            # Fallback model attempt if primary model is unavailable or rate limited
-            if resp.status_code != 200 and gemini_model != "gemini-2.0-flash":
-                fb_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-                fb_resp = await client.post(fb_url, headers={"Content-Type": "application/json"}, json=payload)
-                if fb_resp.status_code == 200:
-                    fb_data = fb_resp.json()
-                    candidates = fb_data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts:
-                            text_reply = parts[0].get("text", "")
-                            if text_reply:
-                                return {"reply": text_reply, "provider": "gemini", "model": "gemini-2.0-flash"}
-
-            err_text = resp.text[:120]
-            return {
-                "reply": f"Erro na API do Google Gemini ({resp.status_code}): {err_text}. Verifique sua chave de API nas Configurações.",
-                "provider": "gemini",
-                "model": gemini_model,
-                "error_type": "gemini_api_error",
-                "can_fallback": True
-            }
+        from src.agent.copilot_master_agent import copilot_master_agent
+        result = await copilot_master_agent.chat(
+            message=req.message,
+            conversation_history=req.conversation_history,
+            context=req.context,
+            model_name=req.model or "gemini-3.7-flash",
+            provider="gemini",
+            gemini_api_key=gemini_key
+        )
+        return result
     except Exception as e:
-        logger.warning(f"Gemini chat error: {e}")
+        logger.warning(f"Gemini autonomous agent error: {e}", exc_info=True)
         return {
-            "reply": f"Erro ao comunicar com a nuvem do Google Gemini: {str(e)[:100]}. Verifique sua conexão com a internet ou alterne para o Ollama Local.",
+            "reply": f"Erro durante a execução autônoma do Copilot Gemini: {str(e)[:120]}. Verifique sua conexão ou tente novamente.",
             "provider": "gemini",
-            "model": gemini_model,
-            "error_type": "gemini_error",
-            "can_fallback": True
+            "model": req.model or "gemini-3.7-flash",
+            "error_type": "agent_error",
+            "can_fallback": True,
+            "media_items": [],
+            "executed_tools": [],
+            "thought_chain": [],
+            "client_action": None
         }
 
 
@@ -2289,7 +3018,7 @@ async def scan_candidates(req: ScanRequest):
         return {
             "url": req.url,
             "title": page_info.get("title", ""),
-            "candidates": [c.model_dump() for c in candidates],
+            "candidates": [c.model_dump() if hasattr(c, "model_dump") else c.dict() for c in candidates],
         }
     finally:
         await engine.close()
@@ -2915,7 +3644,7 @@ async def _run_ai_react_agent_task(session_id: str, req: AnalyzeRequest, semapho
                 _active_jobs[session_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                 _active_jobs[session_id]["progress"]["current"] = len(album.images)
                 _active_jobs[session_id]["progress"]["total"] = len(album.images)
-                _active_jobs[session_id]["progress"]["status"] = f"Álbum salvo ({len(album.images)} fotos originais)"
+                _active_jobs[session_id]["progress"]["status"] = f"Album saved ({len(album.images)} original photos)"
 
             if queue:
                 comp_evt = {
@@ -3004,7 +3733,7 @@ async def _run_gemini_surgical_task(session_id: str, req: AnalyzeRequest, semaph
                 _active_jobs[session_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                 _active_jobs[session_id]["progress"]["current"] = len(album.images)
                 _active_jobs[session_id]["progress"]["total"] = len(album.images)
-                _active_jobs[session_id]["progress"]["status"] = f"Álbum salvo ({len(album.images)} fotos originais)"
+                _active_jobs[session_id]["progress"]["status"] = f"Album saved ({len(album.images)} original photos)"
 
             if queue:
                 comp_evt = {
@@ -3087,7 +3816,7 @@ async def _run_gemini_layout_task(session_id: str, req: AnalyzeRequest, semaphor
                 _active_jobs[session_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                 _active_jobs[session_id]["progress"]["current"] = len(album.images)
                 _active_jobs[session_id]["progress"]["total"] = len(album.images)
-                _active_jobs[session_id]["progress"]["status"] = f"Álbum salvo ({len(album.images)} fotos originais)"
+                _active_jobs[session_id]["progress"]["status"] = f"Album saved ({len(album.images)} original photos)"
 
             if queue:
                 comp_evt = {
@@ -3616,7 +4345,7 @@ async def _run_agent_task(session_id: str, req: AnalyzeRequest, semaphore: Optio
                             _active_jobs[session_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                             _active_jobs[session_id]["progress"]["current"] = len(album.images)
                             _active_jobs[session_id]["progress"]["total"] = len(album.images)
-                            _active_jobs[session_id]["progress"]["status"] = f"Álbum salvo ({len(album.images)} vídeos originais)"
+                            _active_jobs[session_id]["progress"]["status"] = f"Album saved ({len(album.images)} original videos)"
 
                         if queue:
                             c_evt = {
@@ -3791,7 +4520,7 @@ async def _run_agent_task(session_id: str, req: AnalyzeRequest, semaphore: Optio
                         _active_jobs[session_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                         _active_jobs[session_id]["progress"]["current"] = len(album.images)
                         _active_jobs[session_id]["progress"]["total"] = len(album.images)
-                        _active_jobs[session_id]["progress"]["status"] = f"Álbum salvo ({len(album.images)} resoluções até 1080p)"
+                        _active_jobs[session_id]["progress"]["status"] = f"Album saved ({len(album.images)} resolutions até 1080p)"
 
                     if queue:
                         c_evt = {
@@ -3907,7 +4636,7 @@ async def _run_agent_task(session_id: str, req: AnalyzeRequest, semaphore: Optio
                             _active_jobs[session_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                             _active_jobs[session_id]["progress"]["current"] = len(album.images)
                             _active_jobs[session_id]["progress"]["total"] = len(album.images)
-                            _active_jobs[session_id]["progress"]["status"] = f"Álbum salvo ({len(album.images)} resoluções - Máx: {best_q})"
+                            _active_jobs[session_id]["progress"]["status"] = f"Album saved ({len(album.images)} resolutions - Máx: {best_q})"
 
                         if queue:
                             c_evt = {
@@ -4045,7 +4774,7 @@ async def _run_agent_task(session_id: str, req: AnalyzeRequest, semaphore: Optio
                             _active_jobs[session_id]["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
                             _active_jobs[session_id]["progress"]["current"] = len(album.images)
                             _active_jobs[session_id]["progress"]["total"] = len(album.images)
-                            _active_jobs[session_id]["progress"]["status"] = f"Álbum salvo ({len(album.images)} vídeos originais)"
+                            _active_jobs[session_id]["progress"]["status"] = f"Album saved ({len(album.images)} original videos)"
 
                         if queue:
                             c_evt = {
@@ -4182,12 +4911,12 @@ async def cancel_job(session_id: str):
         _job_controllers.pop(session_id, None)
     if session_id in _active_jobs:
         _active_jobs[session_id]["status"] = "cancelled"
-        _active_jobs[session_id]["progress"]["status"] = "Cancelado pelo usuário"
+        _active_jobs[session_id]["progress"]["status"] = "Cancelled by user"
         _save_jobs_to_disk()
     queue = _active_event_queues.get(session_id)
     if queue:
         try:
-            await queue.put({"type": "status", "message": "Cancelado pelo usuário"})
+            await queue.put({"type": "status", "message": "Cancelled by user"})
         except Exception:
             pass
     return {"session_id": session_id, "status": "cancelled"}
@@ -4205,12 +4934,12 @@ async def pause_job(session_id: str):
     if session_id in _active_jobs:
         _active_jobs[session_id]["status"] = "paused"
         if isinstance(_active_jobs[session_id].get("progress"), dict):
-            _active_jobs[session_id]["progress"]["status"] = "Pausado pelo usuário"
+            _active_jobs[session_id]["progress"]["status"] = "Paused by user"
         _save_jobs_to_disk()
     queue = _active_event_queues.get(session_id)
     if queue:
         try:
-            await queue.put({"type": "status", "message": "Pausado pelo usuário"})
+            await queue.put({"type": "status", "message": "Paused by user"})
         except Exception:
             pass
     return {"session_id": session_id, "status": "paused"}
@@ -4219,24 +4948,73 @@ async def pause_job(session_id: str):
 @app.post("/api/jobs/{session_id}/resume")
 async def resume_job(session_id: str):
     """
-    Resumes a paused background job.
+    Resumes a paused background job. If task was interrupted or server was restarted,
+    re-launches the background download/extraction task from the exact point it stopped.
     """
-    if session_id in _job_controllers:
-        ctrl = _job_controllers[session_id]
-        if hasattr(ctrl, "resume"):
-            ctrl.resume()
-    if session_id in _active_jobs:
-        _active_jobs[session_id]["status"] = "active"
-        if isinstance(_active_jobs[session_id].get("progress"), dict):
-            _active_jobs[session_id]["progress"]["status"] = "Retomando..."
-        _save_jobs_to_disk()
+    _load_jobs_from_disk()
+    job = _active_jobs.get(session_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    ctrl = _job_controllers.get(session_id)
+    is_live = False
+    if ctrl and hasattr(ctrl, "resume") and hasattr(ctrl, "is_active") and ctrl.is_active():
+        ctrl.resume()
+        is_live = True
+
+    if not is_live:
+        mode = job.get("mode") or job.get("engine_type") or "video_save"
+        if mode in ("video_save", "video_downloader"):
+            vurl = job.get("url")
+            if not vurl:
+                raise HTTPException(status_code=400, detail="Video URL missing in task record")
+            folder_name = job.get("folder") or "Extraídos"
+            target_path = job.get("target_path")
+            if not target_path:
+                target_folder = os.path.join(video_service.base_dir, folder_name)
+                os.makedirs(target_folder, exist_ok=True)
+                clean_name = "".join(c for c in (job.get("progress", {}).get("title") or "video") if c.isalnum() or c in ("-", "_", " ")).strip()
+                target_path = os.path.join(target_folder, f"{clean_name}.mp4")
+                job["target_path"] = target_path
+
+            clean_title = (job.get("progress", {}).get("title") or os.path.splitext(os.path.basename(target_path))[0]).replace("Salvar Vídeo: ", "").strip()
+            headers = _get_video_download_headers(vurl, job.get("source_url"))
+
+            new_task = asyncio.create_task(
+                _run_video_download_task(
+                    job_id=session_id,
+                    vurl=vurl,
+                    clean_title=clean_title,
+                    folder_name=folder_name,
+                    target_path=target_path,
+                    headers=headers,
+                    source_url=job.get("source_url", ""),
+                    source_id=job.get("source_id", ""),
+                    thumbnail_url=job.get("thumbnail_url")
+                )
+            )
+            _job_controllers[session_id] = DownloadTaskController(new_task, target_path)
+        elif mode in ("ai_react", "gemini_surgical_scout", "gemini_layout_explorer", "classic") and job.get("url"):
+            req = AnalyzeRequest(
+                url=job["url"],
+                engine_type=mode,
+                model_name=job.get("model", "qwen2.5:32b")
+            )
+            new_task = asyncio.create_task(_run_agent_task(session_id, req))
+
+    _active_jobs[session_id]["status"] = "running"
+    if isinstance(_active_jobs[session_id].get("progress"), dict):
+        _active_jobs[session_id]["progress"]["status"] = "Retomando download..."
+    _save_jobs_to_disk()
+
     queue = _active_event_queues.get(session_id)
     if queue:
         try:
-            await queue.put({"type": "status", "message": "Retomando..."})
+            await queue.put({"type": "status", "message": "Retomando download..."})
         except Exception:
             pass
-    return {"session_id": session_id, "status": "active"}
+
+    return {"session_id": session_id, "status": "running"}
 
 
 @app.delete("/api/jobs/{session_id}")
@@ -4263,7 +5041,7 @@ async def clear_jobs_queue():
                     pass
             j["status"] = "cancelled"
             if isinstance(j.get("progress"), dict):
-                j["progress"]["status"] = "Cancelado pelo usuário"
+                j["progress"]["status"] = "Cancelled by user"
             cleared += 1
     _save_jobs_to_disk()
     return {"success": True, "cleared_count": cleared}
@@ -4354,62 +5132,84 @@ async def stream_events(session_id: str):
 
 
 @app.get("/api/albums")
-async def list_albums(filter: Optional[str] = None, media_type: Optional[str] = None):
-    """Lists all saved albums loaded from data/albums/ with full summary metrics, supporting GIF/filter queries."""
+async def list_albums(
+    filter: Optional[str] = None,
+    media_type: Optional[str] = None,
+    limit_images_per_album: Optional[int] = Query(None, description="Max preview images per album for lightweight gallery summary")
+):
+    """Lists all saved albums with in-memory caching for sub-millisecond response time."""
+    global _summaries_dirty, _cached_album_summaries
     _load_albums_from_disk()
-    summaries = []
-    for sid, a in _completed_albums.items():
-        summary = AgentDebugger.get_ui_summary(a)
-        summary["session_id"] = sid
-        fpath = os.path.join(ALBUMS_DIR, f"{sid}.json")
-        summary["file_mtime"] = os.path.getmtime(fpath) if os.path.exists(fpath) else 0
-        summary["created_at"] = getattr(a, "created_at", None) or summary.get("created_at") or (a.metadata.get("saved_at") if isinstance(a.metadata, dict) else None)
-        summary["updated_at"] = getattr(a, "updated_at", None) or summary.get("updated_at") or summary["created_at"]
-        summary["is_favorite"] = getattr(a, "is_favorite", False) or (a.metadata.get("is_favorite", False) if isinstance(a.metadata, dict) else False)
-        summaries.append(summary)
 
-    # Filter by GIFs / animated media if requested
+    if _summaries_dirty or not _cached_album_summaries:
+        summaries = []
+        for sid, a in _completed_albums.items():
+            summary = AgentDebugger.get_ui_summary(a)
+            summary["session_id"] = sid
+            if "audit_trails" in summary:
+                summary["audit_trails"] = []
+            summary["file_mtime"] = _disk_album_mtimes.get(f"{sid}.json", 0)
+            summary["created_at"] = getattr(a, "created_at", None) or summary.get("created_at") or (a.metadata.get("saved_at") if isinstance(a.metadata, dict) else None)
+            summary["updated_at"] = getattr(a, "updated_at", None) or summary.get("updated_at") or summary["created_at"]
+            summary["is_favorite"] = getattr(a, "is_favorite", False) or (a.metadata.get("is_favorite", False) if isinstance(a.metadata, dict) else False)
+            summaries.append(summary)
+
+        summaries.sort(
+            key=lambda x: (x.get("created_at") or (x.get("metadata") or {}).get("saved_at", ""), x.get("file_mtime", 0)),
+            reverse=True
+        )
+
+        seen_album_ids: set = set()
+        deduped_summaries = []
+        for s in summaries:
+            aid = s.get("session_id") or s.get("album_id")
+            if aid and aid in seen_album_ids:
+                continue
+            if aid:
+                seen_album_ids.add(aid)
+            deduped_summaries.append(s)
+        _cached_album_summaries = deduped_summaries
+        _summaries_dirty = False
+
+    result = _cached_album_summaries
+
     if filter == "gifs" or media_type == "gif":
-        summaries = [
-            s for s in summaries
+        result = [
+            s for s in result
             if s.get("metadata", {}).get("has_gifs")
             or "gif" in [str(t).lower() for t in s.get("tags", [])]
             or any(i.get("media_type") == "gif" or i.get("is_animated") for i in s.get("images", []))
         ]
 
-    # Sort newest download first (exact second / millisecond)
-    summaries.sort(
-        key=lambda x: (x.get("created_at") or (x.get("metadata") or {}).get("saved_at", ""), x.get("file_mtime", 0)),
-        reverse=True
-    )
+    return result
 
 
-    # Deduplicate by album_id: keep only the most recent session per logical album.
-    # Multiple sess_<id>.json files can share the same album_id when the same page was
-    # extracted more than once; show only one entry (the most recently saved).
-    seen_album_ids: set = set()
-    deduped_summaries = []
-    for s in summaries:
-        aid = s.get("album_id") or s.get("session_id")
-        if aid and aid in seen_album_ids:
-            continue
-        if aid:
-            seen_album_ids.add(aid)
-        deduped_summaries.append(s)
-    summaries = deduped_summaries
-
-    return summaries
-
-
-async def probe_and_update_album_metadata(album: Album, session_id: str = None, save_to_disk: bool = True) -> Album:
+async def probe_and_update_album_metadata(album: Album, session_id: str = None, save_to_disk: bool = True, force: bool = False) -> Album:
     """
     Probes remote origin servers to acquire genuine Content-Length and binary image dimensions
     for any images missing real metadata. Zero fake/mock values.
     Uses ultra-fast HEAD requests first (<30ms), with fallback to streaming GET.
     """
     album = sanitize_album_images(album)
-    missing_imgs = [img for img in album.images if (not img.file_size or img.file_size <= 0 or not img.width or img.width == 0)]
+    if force:
+        missing_imgs = [img for img in album.images if (img.original_url or img.thumbnail_url)]
+    else:
+        # Imagens sem tamanho, ou com resolução 0x0, ou com tamanho suspeito de hotlink block (< 15KB)
+        missing_imgs = [
+            img for img in album.images 
+            if (not img.file_size or img.file_size <= 0 or (img.media_type != "video" and (not img.width or img.width == 0 or img.file_size < 15000)))
+        ]
     if not missing_imgs:
+        tot_bytes = sum(getattr(img, "file_size", 0) or 0 for img in album.images)
+        tot_imgs = len(album.images)
+        try:
+            album.total_size_bytes = tot_bytes
+            album.total_images = tot_imgs
+        except Exception:
+            pass
+        if isinstance(album.metadata, dict):
+            album.metadata["total_size_bytes"] = tot_bytes
+            album.metadata["total_images"] = tot_imgs
         if save_to_disk and session_id:
             _save_album_to_disk(session_id, album)
         return album
@@ -4439,8 +5239,12 @@ async def probe_and_update_album_metadata(album: Album, session_id: str = None, 
                             if head_resp.status_code in (200, 206):
                                 cl = head_resp.headers.get("content-length")
                                 if cl and cl.isdigit() and int(cl) > 0:
-                                    img.file_size = int(cl)
-                                    head_success = True
+                                    sz_cand = int(cl)
+                                    # Se o tamanho for de payload de erro (< 15KB para imagens com resolução fotográfica conhecida), não aceita HEAD cego
+                                    is_hl = (sz_cand < 15000 and getattr(img, "width", 0) > 800) or (7500 <= sz_cand <= 9500)
+                                    if not is_hl:
+                                        img.file_size = sz_cand
+                                        head_success = True
                             elif head_resp.status_code == 503:
                                 await asyncio.sleep(0.5)
                                 continue
@@ -4491,6 +5295,17 @@ async def probe_and_update_album_metadata(album: Album, session_id: str = None, 
 
         await asyncio.gather(*[_probe(img) for img in missing_imgs])
 
+    tot_bytes = sum(getattr(img, "file_size", 0) or 0 for img in album.images)
+    tot_imgs = len(album.images)
+    try:
+        album.total_size_bytes = tot_bytes
+        album.total_images = tot_imgs
+    except Exception:
+        pass
+    if isinstance(album.metadata, dict):
+        album.metadata["total_size_bytes"] = tot_bytes
+        album.metadata["total_images"] = tot_imgs
+
     if save_to_disk and session_id:
         try:
             _save_album_to_disk(session_id, album)
@@ -4502,29 +5317,30 @@ async def probe_and_update_album_metadata(album: Album, session_id: str = None, 
 
 @app.get("/api/albums/{session_id}")
 async def get_album(session_id: str):
-    """Retrieves a completed album entity by session_id, ensuring genuine metadata is populated."""
+    """Retrieves a completed album entity by session_id in <5ms without blocking I/O."""
     if session_id not in _completed_albums:
         _load_albums_from_disk()
     if session_id not in _completed_albums:
         raise HTTPException(status_code=404, detail="Album not found")
     album = _completed_albums[session_id]
 
-    has_missing_info = any(
-        (not img.file_size or img.file_size <= 0) or
-        (img.media_type != "video" and (not img.width or img.width == 0))
-        for img in album.images
-    )
-    if has_missing_info:
-        album = await probe_and_update_album_metadata(album, session_id=session_id, save_to_disk=True)
-
     summary = AgentDebugger.get_ui_summary(album)
     summary["session_id"] = session_id
+    summary["original_title"] = album.original_title
+    summary["title_synced"] = getattr(album, "title_synced", False)
     return summary
 
 
 @app.post("/api/albums/{session_id}/sync-metadata")
 async def sync_album_metadata_endpoint(session_id: str):
-    """Synchronizes genuine file sizes, resolutions and fresh stream URLs for this album."""
+    """
+    Sincroniza metadados reais sob demanda do usuário:
+    1. Testa e recupera URLs de imagens originais em alta resolução caso tenham quebrado ou caído em thumbnail.
+    2. Obtém dimensões reais (largura x altura) e tamanho exato em bytes.
+    3. Extrai paleta de cores dominante via Pillow e atualiza a capa.
+    4. Atualiza metadata e persiste no arquivo JSON em disco.
+    5. Retorna estatísticas completas e mensagem transparente com eventuais falhas.
+    """
     album = _completed_albums.get(session_id)
     if not album:
         _load_albums_from_disk()
@@ -4541,15 +5357,345 @@ async def sync_album_metadata_endpoint(session_id: str):
     has_videos = any(getattr(img, "media_type", None) == "video" for img in album.images)
     if has_videos:
         async with _stream_refresh_semaphore:
-            await _refresh_album_video_streams(album)
+            try:
+                await _refresh_album_video_streams(album)
+            except Exception as ev:
+                logger.warning(f"Video stream refresh warning during sync: {ev}")
 
-    album = await probe_and_update_album_metadata(album, session_id=session_id, save_to_disk=True)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": album.source_page or "https://google.com"
+    }
+
+    # Sincronização do Título Original sem Traduções diretamente da página de origem
+    title_synced = False
+    if album.source_page and (album.source_page.startswith("http://") or album.source_page.startswith("https://")):
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as src_client:
+                src_resp = await src_client.get(album.source_page, headers=headers)
+                if src_resp.status_code == 200:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(src_resp.text, "html.parser")
+                    raw_t = ""
+                    og_title = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "og:title"})
+                    if og_title and og_title.get("content"):
+                        raw_t = str(og_title.get("content")).strip()
+                    elif soup.title and soup.title.string:
+                        raw_t = str(soup.title.string).strip()
+                    elif soup.h1:
+                        raw_t = soup.h1.get_text(strip=True)
+
+                    if raw_t:
+                        # Limpeza agnóstica de sufixos de branding de sites (- Domain.com, | Domain, etc.)
+                        clean_t = re.sub(r'(?i)\s*[-|•–]\s*(?:[a-zA-Z0-9-]+\.[a-zA-Z]{2,4}).*$', '', raw_t).strip()
+                        if clean_t and len(clean_t) >= 2:
+                            album.original_title = clean_t
+                            if not album.title or album.title.strip() == "" or "sem título" in album.title.lower():
+                                album.title = clean_t
+                            title_synced = True
+        except Exception as etit:
+            logger.warning(f"Aviso ao sincronizar título original da fonte: {etit}")
+
+    updated_dim_count = 0
+    updated_size_count = 0
+    repaired_link_count = 0
+    palettes_gen_count = 0
+    failed_images = []
+
+    semaphore = asyncio.Semaphore(6)
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        async def _sync_single_image(img: AlbumImage, idx: int):
+            nonlocal updated_dim_count, updated_size_count, repaired_link_count, palettes_gen_count
+            url = img.original_url or img.thumbnail_url
+            if not url:
+                failed_images.append(f"Item #{idx+1}: Link ausente")
+                return
+
+            img_source_ref = getattr(img, "source_page", None) or album.source_page
+            anti_h = resolve_anti_hotlink_headers(url, referer=img_source_ref)
+            probe_hdrs = dict(headers)
+            probe_hdrs.update(anti_h)
+
+            async with semaphore:
+                # 1. Verificar se o link original está quebrado ou é miniatura forçada
+                is_thumb_like = False
+                if img.original_url and img.thumbnail_url and img.original_url == img.thumbnail_url:
+                    if any(t in img.original_url.lower() for t in ["_thumb", "13_240.jpg", "_296x1000", "thumb", "/t_"]):
+                        is_thumb_like = True
+
+                if is_thumb_like and img.original_url:
+                    candidate_hd = img.original_url
+                    for pat, rep in [("_240.jpg", ".jpg"), ("_thumb.", "."), ("/t_", "/"), ("_small.", ".")]:
+                        if pat in candidate_hd:
+                            candidate_hd = candidate_hd.replace(pat, rep)
+                            break
+                    if candidate_hd != img.original_url:
+                        try:
+                            c_resp = await client.head(candidate_hd, headers=resolve_anti_hotlink_headers(candidate_hd, referer=img_source_ref))
+                            if c_resp.status_code in (200, 206):
+                                img.original_url = candidate_hd
+                                img.resolution_method = ResolutionMethod.VERIFIED_CDN_CANDIDATE
+                                img.validation_status = "PASS"
+                                repaired_link_count += 1
+                                url = candidate_hd
+                        except Exception:
+                            pass
+
+                # 2. Obter tamanho em bytes via HEAD ou Range
+                # Detecta se a imagem atualmente possui anomalia física de tamanho (< 20KB para foto UHD)
+                curr_sz = getattr(img, "file_size", 0) or 0
+                is_suspicious_curr_size = (
+                    curr_sz <= 0
+                    or (curr_sz < 20000 and getattr(img, "width", 0) > 800)
+                    or (7500 <= curr_sz <= 9500)
+                )
+
+                head_ok = False
+                try:
+                    head_resp = await client.head(url, headers=probe_hdrs)
+                    if head_resp.status_code in (200, 206):
+                        cl = head_resp.headers.get("content-length")
+                        if cl and cl.isdigit() and int(cl) > 0:
+                            sz = int(cl)
+                            # Se for payload pequeno (< 20KB) com resolução fotográfica conhecida, rejeita HEAD cego
+                            is_hl_size = (sz < 20000 and getattr(img, "width", 0) > 800) or (7500 <= sz <= 9500)
+                            if not is_hl_size:
+                                if img.file_size != sz:
+                                    img.file_size = sz
+                                    updated_size_count += 1
+                                head_ok = True
+                except Exception:
+                    pass
+
+                # 3. Obter dimensões reais e validar cache local agnóstico
+                need_dimensions = (getattr(img, "media_type", None) != "video" and (not img.width or img.width == 0 or is_suspicious_curr_size))
+                
+                # 3.1 Cache-First com validação de integridade física semântica
+                import hashlib
+                u_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
+                c_bin = os.path.join(_IMAGE_CACHE_DIR, f"{u_hash}.bin")
+                if os.path.exists(c_bin):
+                    c_len = os.path.getsize(c_bin)
+                    if c_len < 20000:
+                        try:
+                            with open(c_bin, "rb") as cf:
+                                c_lead = cf.read(4096).lower()
+                            generic_block_sigs = (
+                                b"hotlink", b"hot-link", b"hotlinking",
+                                b"access denied", b"forbidden", b"unauthorized",
+                                b"embed image", b"direct linking", b"bandwidth limit"
+                            )
+                            if any(sig in c_lead for sig in generic_block_sigs) or (7500 <= c_len <= 9500 and getattr(img, "width", 0) > 800):
+                                os.remove(c_bin)
+                                c_meta = os.path.join(_IMAGE_CACHE_DIR, f"{u_hash}.meta.json")
+                                if os.path.exists(c_meta):
+                                    os.remove(c_meta)
+                        except Exception:
+                            pass
+                    elif need_dimensions or is_suspicious_curr_size:
+                        try:
+                            from PIL import Image as PILImg, ImageFile as PILImgFile
+                            PILImgFile.LOAD_TRUNCATED_IMAGES = True
+                            with PILImg.open(c_bin) as pim:
+                                pw, ph = pim.size
+                                if not (pw == 400 and ph == 300 and c_len < 15000):
+                                    if img.width != pw or img.height != ph:
+                                        img.width = pw
+                                        img.height = ph
+                                        updated_dim_count += 1
+                                    need_dimensions = False
+                                    if img.file_size != c_len:
+                                        img.file_size = c_len
+                                        updated_size_count += 1
+                                    head_ok = True
+                        except Exception:
+                            pass
+
+                # 3.2 Streaming incremental com Pillow Parser caso falte tamanho, falte dimensão ou tamanho seja suspeito de hotlink block
+                if need_dimensions or not head_ok or is_suspicious_curr_size:
+                    try:
+                        get_hdrs = dict(probe_hdrs)
+                        if getattr(img, "media_type", None) == "video":
+                            get_hdrs["Range"] = "bytes=0-0"
+                        async with client.stream("GET", url, headers=get_hdrs) as resp:
+                            if resp.status_code in (200, 206):
+                                if not head_ok:
+                                    cr = resp.headers.get("content-range", "")
+                                    if "/" in cr:
+                                        part = cr.split("/")[-1].strip()
+                                        if part.isdigit() and int(part) > 0:
+                                            img.file_size = int(part)
+                                            updated_size_count += 1
+                                    elif resp.headers.get("content-length"):
+                                        cl = resp.headers.get("content-length", "")
+                                        if cl and cl.isdigit() and int(cl) > 0:
+                                            img.file_size = int(cl)
+                                            updated_size_count += 1
+
+                                if need_dimensions:
+                                    from PIL import ImageFile as PILImgFile
+                                    PILImgFile.LOAD_TRUNCATED_IMAGES = True
+                                    parser = PILImgFile.Parser()
+                                    chunk_bytes = 0
+                                    async for c in resp.aiter_bytes():
+                                        parser.feed(c)
+                                        chunk_bytes += len(c)
+                                        if parser.image:
+                                            img.width = parser.image.size[0]
+                                            img.height = parser.image.size[1]
+                                            updated_dim_count += 1
+                                            break
+                                        if chunk_bytes >= 65536:
+                                            break
+                            elif resp.status_code in (404, 403, 410):
+                                failed_images.append(f"Item #{idx+1}: HTTP {resp.status_code}")
+                    except Exception as eg:
+                        failed_images.append(f"Item #{idx+1}: Falha de conexão ({type(eg).__name__})")
+
+                # 4. Extrair paleta de cores dominante via Pillow se faltar
+                if not getattr(img, "color_palette", None) or len(img.color_palette) < 7:
+                    pal_url = img.thumbnail_url or img.original_url
+                    if pal_url:
+                        pal = await extract_palette_for_media_url(pal_url, source_page=img_source_ref, client=client)
+                        if pal:
+                            img.color_palette = pal
+                            palettes_gen_count += 1
+
+                # 4.1 Pré-aquecimento da miniatura WebP leve (360px) em cache local persistente
+                thumb_target_url = img.thumbnail_url or img.original_url
+                if thumb_target_url and getattr(img, "media_type", None) != "video":
+                    try:
+                        t_hash = hashlib.sha256(thumb_target_url.encode("utf-8")).hexdigest()
+                        t_webp_path = os.path.join(_IMAGE_CACHE_DIR, f"{t_hash}_w360.webp")
+                        c_orig_path = os.path.join(_IMAGE_CACHE_DIR, f"{t_hash}.bin")
+                        if not os.path.exists(t_webp_path) and os.path.exists(c_orig_path):
+                            with open(c_orig_path, "rb") as c_orig_file:
+                                c_raw = c_orig_file.read()
+                            if len(c_raw) > 100:
+                                t_webp = await asyncio.to_thread(_generate_thumbnail_webp_sync, c_raw, 360)
+                                if t_webp:
+                                    with open(t_webp_path, "wb") as tw_file:
+                                        tw_file.write(t_webp)
+                    except Exception:
+                        pass
+
+        await asyncio.gather(*[_sync_single_image(img, i) for i, img in enumerate(album.images)])
+
+    # 5. Capa e Cores da Capa
+    ensure_album_cover(album)
+    if not getattr(album, "cover_color_palette", None) or len(album.cover_color_palette) < 7:
+        if album.images and getattr(album.images[0], "color_palette", None):
+            album.cover_color_palette = album.images[0].color_palette
+        elif album.cover_image_url:
+            c_pal = await extract_palette_for_media_url(album.cover_image_url, source_page=album.source_page)
+            if c_pal:
+                album.cover_color_palette = c_pal
+
+    # 6. Atualizar totais e salvar no disco
+    tot_bytes = sum(getattr(img, "file_size", 0) or 0 for img in album.images)
+    tot_imgs = len(album.images)
+    try:
+        album.total_size_bytes = tot_bytes
+        album.total_images = tot_imgs
+    except Exception:
+        pass
+    if not isinstance(album.metadata, dict):
+        album.metadata = {}
+    album.metadata["total_size_bytes"] = tot_bytes
+    album.metadata["total_images"] = tot_imgs
+    album.metadata["palette_version"] = PALETTE_ENGINE_VERSION
+    now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    album.updated_at = now_ts
+    album.metadata["updated_at"] = now_ts
+
     _completed_albums[session_id] = album
     _save_album_to_disk(session_id, album)
 
     summary = AgentDebugger.get_ui_summary(album)
     summary["session_id"] = session_id
+    summary["total_size_bytes"] = tot_bytes
+
+    failed_cnt = len(failed_images)
+    msg_title = f", título original '{album.original_title}' sincronizado da fonte" if title_synced else ""
+    if failed_cnt > 0:
+        msg = f"Atenção na sincronização: {tot_imgs - failed_cnt} de {tot_imgs} itens verificados com sucesso. {failed_cnt} item(ns) apresentaram bloqueio de hotlink ou link inacessível no servidor de origem."
+    elif updated_dim_count == 0 and updated_size_count == 0 and palettes_gen_count == 0 and repaired_link_count == 0:
+        msg = f"Sincronização concluída: Todos os {tot_imgs} itens foram verificados na íntegra{msg_title} (nenhuma anomalia ou link quebrado detectado)."
+    else:
+        msg = f"✓ {tot_imgs} itens sincronizados com sucesso ({updated_dim_count} dimensões, {updated_size_count} tamanhos, {palettes_gen_count} paletas atualizadas{msg_title})."
+
+    summary["sync_stats"] = {
+        "total_images": tot_imgs,
+        "updated_dimensions": updated_dim_count,
+        "updated_sizes": updated_size_count,
+        "repaired_links": repaired_link_count,
+        "palettes_generated": palettes_gen_count,
+        "failed_count": failed_cnt,
+        "failed_details": failed_images[:5]
+    }
+    summary["sync_message"] = msg
+
     return summary
+
+
+@app.post("/api/albums/{session_id}/prewarm")
+async def prewarm_album_thumbnails(session_id: str, background_tasks: BackgroundTasks):
+    """
+    Dispara o pré-aquecimento ordenado e preemptivo das miniaturas do álbum em segundo plano.
+    Executa no máximo 1 download por vez e pausa imediatamente (1.5s) se o usuário interagir.
+    """
+    if session_id not in _completed_albums:
+        _load_albums_from_disk()
+    album = _completed_albums.get(session_id)
+    if not album:
+        fpath = os.path.join(ALBUMS_DIR, f"{session_id}.json")
+        if os.path.exists(fpath):
+            with open(fpath, "r", encoding="utf-8") as f:
+                album = Album.model_validate_json(f.read())
+                _completed_albums[session_id] = album
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+
+    async def _prewarm_worker(images_list: list):
+        client = get_image_proxy_client()
+        for img in images_list:
+            # Respeita a pausa de preempção se o usuário estiver navegando/interagindo
+            while time.time() < _PREWARM_PAUSE_UNTIL:
+                await asyncio.sleep(0.3)
+
+            thumb_url = getattr(img, "thumbnail_url", None) or getattr(img, "original_url", None)
+            if not thumb_url or not str(thumb_url).startswith("http"):
+                continue
+
+            import hashlib
+            url_hash = hashlib.sha256(thumb_url.encode("utf-8")).hexdigest()
+            cache_thumb = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}_w360.webp")
+            if os.path.exists(cache_thumb):
+                continue  # Miniatura já gerada e persistida em disco
+
+            # Conexão suave de 1 download por vez
+            try:
+                if time.time() >= _PREWARM_PAUSE_UNTIL:
+                    headers = resolve_anti_hotlink_headers(thumb_url, referer=getattr(img, "source_page", None) or album.source_page)
+                    res = await client.get(thumb_url, headers=headers)
+                    if res.status_code == 200:
+                        raw = res.content
+                        temp_bin = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.tmp")
+                        with open(temp_bin, "wb") as bf:
+                            bf.write(raw)
+                        os.replace(temp_bin, os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}.bin"))
+                        t_bytes = await asyncio.to_thread(_generate_thumbnail_webp_sync, raw, 360)
+                        if t_bytes:
+                            temp_thumb = os.path.join(_IMAGE_CACHE_DIR, f"{url_hash}_w360.tmp")
+                            with open(temp_thumb, "wb") as tbf:
+                                tbf.write(t_bytes)
+                            os.replace(temp_thumb, cache_thumb)
+                await asyncio.sleep(0.1)  # Intervalo suave entre downloads para não saturar banda
+            except Exception:
+                pass
+
+    background_tasks.add_task(_prewarm_worker, list(album.images or []))
+    return {"status": "prewarm_started", "session_id": session_id}
 
 
 @app.delete("/api/albums/{session_id}")
@@ -4562,6 +5708,9 @@ async def delete_album(session_id: str):
     if session_id in _completed_albums:
         summary = AgentDebugger.get_ui_summary(_completed_albums[session_id])
         del _completed_albums[session_id]
+        global _summaries_dirty
+        _summaries_dirty = True
+        _disk_album_mtimes.pop(f"{session_id}.json", None)
 
     trash_item = trash_service.move_album_to_trash(session_id, summary)
     
@@ -4607,7 +5756,7 @@ async def delete_album_images(session_id: str, req: DeleteImagesRequest):
             or (img.original_url and img.original_url in to_delete)
             or (img.thumbnail_url and img.thumbnail_url in to_delete)
         ):
-            deleted_images_data.append(img.model_dump())
+            deleted_images_data.append(img.model_dump() if hasattr(img, "model_dump") else img.dict())
             continue
         retained_images.append(img)
 
@@ -4792,7 +5941,21 @@ async def _run_video_download_task(
     last_disk_save = start_time
     total_written = 0
     total_bytes = 0
+    bytes_this_session = 0
     custom_timeout = httpx.Timeout(connect=30.0, read=None, write=60.0, pool=60.0)
+
+    # Verifica se já existe arquivo parcial no disco para continuar de onde parou (Range)
+    if os.path.exists(target_path):
+        try:
+            fsize = os.path.getsize(target_path)
+            if fsize > 0:
+                total_written = fsize
+                if job_id in _active_jobs:
+                    _active_jobs[job_id]["downloaded_bytes"] = total_written
+                    if isinstance(_active_jobs[job_id].get("progress"), dict):
+                        _active_jobs[job_id]["progress"]["downloaded_bytes"] = total_written
+        except Exception:
+            pass
     max_retries = 3
     retry_count = 0
     use_resilient = False
@@ -4818,6 +5981,10 @@ async def _run_video_download_task(
                                 resilient_reason = f"HTTP {resp.status_code}"
                                 break
 
+                            # Se o servidor respondeu 200 (não 206), não suporta Range e está mandando do zero
+                            if resp.status_code == 200 and total_written > 0:
+                                total_written = 0
+
                             cl = resp.headers.get("content-length")
                             cr = resp.headers.get("content-range")
                             if cr and "/" in cr:
@@ -4837,14 +6004,15 @@ async def _run_video_download_task(
                                 async for chunk in resp.aiter_bytes(chunk_size=256 * 1024):
                                     ctrl = _job_controllers.get(job_id)
                                     if ctrl and getattr(ctrl, 'is_cancelled', False):
-                                        raise Exception("Download cancelado pelo usuário.")
+                                        raise Exception("Download cancelled by user.")
                                     if ctrl and hasattr(ctrl, 'wait_if_paused'):
                                         await ctrl.wait_if_paused()
                                     fp.write(chunk)
                                     total_written += len(chunk)
+                                    bytes_this_session += len(chunk)
                                     now = time.time()
                                     elapsed = max(0.2, now - start_time)
-                                    speed_mbps = (total_written / elapsed) / (1024 * 1024)
+                                    speed_mbps = (bytes_this_session / elapsed) / (1024 * 1024)
 
                                     if total_bytes > 0:
                                         percent = min(99, int((total_written / total_bytes) * 100))
@@ -4947,7 +6115,7 @@ async def _run_video_download_task(
                     os.remove(target_path)
                 except Exception:
                     pass
-            raise RuntimeError("Vídeo indisponível ou corrompido (tamanho insuficiente).")
+            raise RuntimeError("Video unavailable or corrupted (insufficient size).")
 
         if job_id in _active_jobs:
             _active_jobs[job_id]["progress"]["status"] = "Gerando miniatura e salvando na galeria..."
@@ -4990,7 +6158,7 @@ async def _run_video_download_task(
             _active_jobs[job_id]["progress"]["percent"] = 100
             _active_jobs[job_id]["progress"]["current"] = total_written
             _active_jobs[job_id]["progress"]["total"] = total_written
-            _active_jobs[job_id]["progress"]["status"] = f"Vídeo salvo na pasta {folder_name}! ({total_written / (1024 * 1024):.1f} MB)"
+            _active_jobs[job_id]["progress"]["status"] = f"Video saved to folder {folder_name}! ({total_written / (1024 * 1024):.1f} MB)"
             _active_jobs[job_id]["video_id"] = vid_id
             _save_jobs_to_disk(sync_hf=True)
         logger.info(f"[VideoDownloader] Sucesso: {target_path} ({total_written / (1024 * 1024):.1f} MB em {dur}s)")
@@ -5058,7 +6226,7 @@ async def save_extracted_video_to_gallery(req: SaveExtractedVideoRequest):
             elif not source_page_url:
                 return {
                     "success": False,
-                    "message": "Não foi possível resolver o fluxo do vídeo para download."
+                    "message": "Could not resolve video stream for download."
                 }
         except Exception as e_res:
             logger.warning(f"Could not resolve direct stream for {vurl}: {e_res}")
@@ -5089,7 +6257,7 @@ async def save_extracted_video_to_gallery(req: SaveExtractedVideoRequest):
             "downloaded_bytes": 0,
             "total_bytes": 0,
             "throughput_mbps": 0.0,
-            "title": f"Salvar Vídeo: {clean_title}",
+            "title": f"Save Video: {clean_title}",
             "status": "Iniciando download do stream..."
         },
         "downloaded_bytes": 0,
@@ -5375,7 +6543,7 @@ async def scan_page_for_videos_endpoint(req: ScanPageVideosRequest):
     """
     target_url = req.url.strip()
     if not target_url or not (target_url.startswith("http://") or target_url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="URL inválida.")
+        raise HTTPException(status_code=400, detail="Invalid URL.")
 
     from playwright.async_api import async_playwright
 
@@ -5618,7 +6786,7 @@ async def scan_page_for_videos_endpoint(req: ScanPageVideosRequest):
 
         except Exception as exc:
             logger.error(f"Failed to scan page for videos at {target_url}: {exc}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Erro ao escanear vídeos da página: {str(exc)}")
+            raise HTTPException(status_code=500, detail=f"Error scanning page videos: {str(exc)}")
         finally:
             await browser.close()
 
@@ -5631,7 +6799,7 @@ async def batch_save_videos_endpoint(req: BatchSaveVideosRequest):
     Updates _active_jobs for real-time live monitoring in Gestão de Tarefas.
     """
     if not req.videos:
-        raise HTTPException(status_code=400, detail="Nenhum vídeo selecionado para baixar.")
+        raise HTTPException(status_code=400, detail="No videos selected for download.")
 
     target_folder_name = req.folder.strip() if req.folder and req.folder.strip() else "Extraídos"
     target_folder = os.path.join(video_service.base_dir, target_folder_name)
@@ -5646,7 +6814,7 @@ async def batch_save_videos_endpoint(req: BatchSaveVideosRequest):
         async with semaphore:
             if jid in _active_jobs:
                 _active_jobs[jid]["status"] = "running"
-                _active_jobs[jid]["progress"]["status"] = "Resolvendo stream de vídeo 1080p HD..."
+                _active_jobs[jid]["progress"]["status"] = "Resolving 1080p HD video stream..."
                 _save_jobs_to_disk()
 
             # 1. Resolve stream URL if needed
@@ -5658,7 +6826,7 @@ async def batch_save_videos_endpoint(req: BatchSaveVideosRequest):
                 logger.error(f"Could not resolve stream URL for video {v_item.id}")
                 if jid in _active_jobs:
                     _active_jobs[jid]["status"] = "error"
-                    _active_jobs[jid]["error"] = "Não foi possível resolver o stream do vídeo"
+                    _active_jobs[jid]["error"] = "Could not resolve video stream"
                     _active_jobs[jid]["progress"]["status"] = "Falha ao resolver stream"
                     _save_jobs_to_disk(sync_hf=True)
 
@@ -5722,7 +6890,7 @@ async def batch_save_videos_endpoint(req: BatchSaveVideosRequest):
                 "downloaded_bytes": 0,
                 "total_bytes": 0,
                 "throughput_mbps": 0.0,
-                "title": f"Salvar Vídeo: {clean_title}",
+                "title": f"Save Video: {clean_title}",
                 "status": "Na fila de downloads (concorrência máxima: 2)..."
             },
             "downloaded_bytes": 0,
@@ -5755,9 +6923,22 @@ async def batch_save_videos_endpoint(req: BatchSaveVideosRequest):
 
 
 @app.get("/api/videos")
-async def get_videos_and_folders():
-    """Lists all stored videos and folders on disk."""
+async def get_videos_and_folders(heal: bool = False):
+    """Lists all stored videos and folders on disk. Optionally heals missing thumbnails in background."""
+    if heal:
+        video_service.auto_heal_all_thumbnails(background=True)
     return {
+        "videos": video_service.list_all_videos(),
+        "folders": video_service.list_folders()
+    }
+
+
+@app.post("/api/videos/sync")
+async def sync_videos_endpoint():
+    """Triggers disk scan and asynchronous thumbnail healing for all videos missing thumbnails."""
+    video_service.auto_heal_all_thumbnails(background=True)
+    return {
+        "success": True,
         "videos": video_service.list_all_videos(),
         "folders": video_service.list_folders()
     }
@@ -5771,7 +6952,7 @@ async def upload_video_file(
     """Uploads a local video file streaming directly to data/videos/{folder}/ in 8MB chunks."""
     video = video_service.save_uploaded_file_stream(file.filename, file.file, folder=folder, source_origin="pc")
     if not video:
-        raise HTTPException(status_code=500, detail="Falha ao salvar vídeo no disco")
+        raise HTTPException(status_code=500, detail="Failed to save video to disk")
     return video
 
 
@@ -5841,13 +7022,13 @@ async def add_video_by_url(req: AddVideoUrlRequest):
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             resp = await client.get(target_stream_url, headers=headers)
             if resp.status_code != 200 or len(resp.content) < 1000:
-                raise HTTPException(status_code=400, detail="URL inválida ou resposta não contém vídeo válido")
+                raise HTTPException(status_code=400, detail="Invalid URL or response does not contain a valid video")
             video = video_service.save_uploaded_file(filename, resp.content, folder=req.folder or "Geral", source_origin="web", source_url=req.url)
             if not video:
-                raise HTTPException(status_code=500, detail="Erro ao salvar arquivo de vídeo no disco")
+                raise HTTPException(status_code=500, detail="Error saving video file to disk")
             return video
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao baixar vídeo: {e}")
+        raise HTTPException(status_code=500, detail=f"Error downloading video: {e}")
 
 
 # =====================================================================
@@ -5914,7 +7095,7 @@ async def get_storage_analytics():
 
 @app.post("/api/albums/upload")
 async def upload_photo_album(
-    title: str = Form("Novo Álbum"),
+    title: str = Form("New Album"),
     files: List[UploadFile] = File(...),
     folder: Optional[str] = Form("Geral")
 ):
@@ -5923,7 +7104,7 @@ async def upload_photo_album(
     Gera miniaturas, metadados e adiciona à galeria de fotos instantaneamente.
     """
     if not files:
-        raise HTTPException(status_code=400, detail="Nenhum arquivo enviado")
+        raise HTTPException(status_code=400, detail="No files uploaded")
 
     session_id = f"manual-{int(time.time())}-{hashlib.md5(title.encode()).hexdigest()[:6]}"
     album_dir = os.path.join(DATA_DIR, "albums", session_id)
@@ -6027,7 +7208,7 @@ async def repair_all_palettes(
             "scanned_albums": 0,
             "repaired_albums": 0,
             "repaired_images": 0,
-            "message": "Diretório de álbuns vazio."
+            "message": "Album directory empty."
         }
 
     files = [f for f in os.listdir(target_albums_dir) if f.endswith(".json") and not f.startswith("vid_page_")]
@@ -6200,7 +7381,7 @@ async def get_keys_status():
 
     # Test Hugging Face live
     from src.server.video_service import cloud_storage
-    hf_connected = cloud_storage.is_connected()
+    hf_connected, hf_error = cloud_storage.get_connection_status()
 
     return {
         "gemini": {
@@ -6213,7 +7394,8 @@ async def get_keys_status():
             "is_set": bool(raw_hf),
             "masked_token": _mask_secret(raw_hf),
             "repo_id": raw_repo or "lokkmorant/album-data",
-            "is_connected": hf_connected
+            "is_connected": hf_connected,
+            "error": hf_error
         }
     }
 
@@ -6262,15 +7444,142 @@ async def update_keys(req: UpdateKeysRequest):
         cloud_storage._api = None
         updated = True
 
-    if updated and os.path.exists(env_file):
+    if updated:
         try:
             with open(env_file, "w", encoding="utf-8") as f:
                 for k, v in env_lines.items():
                     f.write(f"{k}={v}\n")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Erro ao salvar .env: {e}")
+
+        global _hf_restore_done
+        _hf_restore_done = False
 
     return await get_keys_status()
+
+
+@app.post("/api/settings/hf/sync")
+async def sync_huggingface_data():
+    """
+    Sincroniza e restaura sob demanda todos os albuns, jobs e videos do dataset Hugging Face.
+    """
+    from src.server.video_service import cloud_storage as _cs
+    if not _cs.is_connected():
+        conn, err = _cs.get_connection_status()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Hugging Face desconectado: {err or 'Verifique seu HF_TOKEN (deve comecar com hf_) e o repositorio.'}"
+        )
+
+    results = {
+        "restored_albums": 0,
+        "restored_pc_albums": 0,
+        "restored_jobs": 0,
+        "restored_videos": 0,
+        "errors": []
+    }
+
+    # 1. Sincronizar albuns da pasta 'albums/'
+    try:
+        cloud_paths = _cs.list_files_in_folder("albums")
+        for hf_path in cloud_paths:
+            if not hf_path.endswith(".json") or os.path.basename(hf_path).startswith("vid_page_"):
+                continue
+            fname = os.path.basename(hf_path)
+            local_fpath = os.path.join(ALBUMS_DIR, fname)
+            if not os.path.exists(local_fpath):
+                album_data = _cs.download_json(hf_path)
+                if album_data and isinstance(album_data, dict):
+                    if "metadata" not in album_data or not isinstance(album_data["metadata"], dict):
+                        album_data["metadata"] = {}
+                    album_data["source_origin"] = "remote"
+                    with open(local_fpath, "w", encoding="utf-8") as f:
+                        json.dump(album_data, f, indent=2, ensure_ascii=False)
+                    results["restored_albums"] += 1
+    except Exception as e:
+        results["errors"].append(f"Erro em albums/: {str(e)}")
+
+    # 2. Sincronizar albuns da pasta 'meus_albuns_pc/albums/'
+    try:
+        pc_paths = _cs.list_files_in_folder("meus_albuns_pc/albums")
+        for hf_path in pc_paths:
+            if not hf_path.endswith(".json") or os.path.basename(hf_path).startswith("vid_page_"):
+                continue
+            fname = os.path.basename(hf_path)
+            local_fpath = os.path.join(ALBUMS_DIR, fname)
+            if not os.path.exists(local_fpath):
+                album_data = _cs.download_json(hf_path)
+                if album_data and isinstance(album_data, dict):
+                    if "metadata" not in album_data or not isinstance(album_data["metadata"], dict):
+                        album_data["metadata"] = {}
+                    album_data["source_origin"] = "local"
+                    album_data["metadata"]["source_origin"] = "local"
+                    with open(local_fpath, "w", encoding="utf-8") as f:
+                        json.dump(album_data, f, indent=2, ensure_ascii=False)
+                    results["restored_pc_albums"] += 1
+    except Exception as e:
+        results["errors"].append(f"Erro em meus_albuns_pc/albums/: {str(e)}")
+
+    # 3. Sincronizar metadata/jobs.json
+    try:
+        remote_jobs = _cs.download_json("metadata/jobs.json")
+        if remote_jobs and isinstance(remote_jobs, dict):
+            local_jobs = {}
+            if os.path.exists(JOBS_FILE):
+                try:
+                    with open(JOBS_FILE, "r", encoding="utf-8") as f:
+                        local_jobs = json.load(f)
+                except Exception:
+                    local_jobs = {}
+            added_jobs = 0
+            for j_id, j_data in remote_jobs.items():
+                if j_id not in local_jobs:
+                    local_jobs[j_id] = j_data
+                    added_jobs += 1
+            if added_jobs > 0:
+                with open(JOBS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(local_jobs, f, indent=2, ensure_ascii=False)
+                _load_jobs_from_disk()
+            results["restored_jobs"] = added_jobs
+    except Exception as e:
+        results["errors"].append(f"Erro em metadata/jobs.json: {str(e)}")
+
+    # 4. Sincronizar metadata/videos_metadata.json
+    try:
+        remote_vids = _cs.download_json("metadata/videos_metadata.json")
+        if remote_vids and isinstance(remote_vids, dict):
+            v_meta_file = os.path.join(VIDEOS_DIR, "videos_metadata.json")
+            local_vids = {}
+            if os.path.exists(v_meta_file):
+                try:
+                    with open(v_meta_file, "r", encoding="utf-8") as f:
+                        local_vids = json.load(f)
+                except Exception:
+                    local_vids = {}
+            added_vids = 0
+            for v_id, v_data in remote_vids.items():
+                if v_id not in local_vids:
+                    local_vids[v_id] = v_data
+                    added_vids += 1
+            if added_vids > 0:
+                with open(v_meta_file, "w", encoding="utf-8") as f:
+                    json.dump(local_vids, f, indent=2, ensure_ascii=False)
+            results["restored_videos"] = added_vids
+    except Exception as e:
+        results["errors"].append(f"Erro em metadata/videos_metadata.json: {str(e)}")
+
+    # 5. Forcar atualizacao do cache de albuns na memoria
+    global _last_albums_dir_mtime, _summaries_dirty
+    _last_albums_dir_mtime = 0.0
+    _summaries_dirty = True
+    _load_albums_from_disk()
+
+    total = results["restored_albums"] + results["restored_pc_albums"] + results["restored_videos"]
+    return {
+        "success": True,
+        "message": f"Sincronizacao concluida: {results['restored_albums'] + results['restored_pc_albums']} albuns e {results['restored_videos']} videos novos importados do Hugging Face.",
+        "details": results
+    }
 
 
 @app.api_route("/api/videos/{video_id}/stream", methods=["GET", "HEAD"])
@@ -6280,7 +7589,7 @@ async def stream_video(video_id: str, request: Request):
     import mimetypes
     video = video_service.get_video_by_id(video_id)
     if not video:
-        raise HTTPException(status_code=404, detail="Vídeo não encontrado")
+        raise HTTPException(status_code=404, detail="Video not found")
 
     local_exists = video.get("full_path") and os.path.exists(video["full_path"])
 
@@ -6288,7 +7597,7 @@ async def stream_video(video_id: str, request: Request):
     if not local_exists:
         cloud_url = video.get("cloud_url") or video.get("source_url")
         if not cloud_url or not cloud_url.startswith("http"):
-            raise HTTPException(status_code=404, detail="Vídeo não encontrado localmente nem na nuvem")
+            raise HTTPException(status_code=404, detail="Video not found locally or in cloud")
 
         from src.server.video_service import cloud_storage as _cs
         hf_token = _cs.token or os.getenv("HF_TOKEN", "")
@@ -6310,7 +7619,7 @@ async def stream_video(video_id: str, request: Request):
             hf_req = client.build_request("GET", cloud_url, headers=proxy_headers)
             hf_resp = await client.send(hf_req, stream=True)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Erro de conexão com storage remoto: {str(e)}")
+            raise HTTPException(status_code=502, detail=f"Remote storage connection error: {str(e)}")
 
         if hf_resp.status_code not in (200, 206):
             try:
@@ -6318,7 +7627,7 @@ async def stream_video(video_id: str, request: Request):
                 await client.aclose()
             except Exception:
                 pass
-            raise HTTPException(status_code=hf_resp.status_code, detail="Erro ao carregar vídeo do armazenamento remoto")
+            raise HTTPException(status_code=hf_resp.status_code, detail="Error loading video from remote storage")
 
         resp_headers = {
             "Accept-Ranges": "bytes",
@@ -6352,7 +7661,7 @@ async def stream_video(video_id: str, request: Request):
 
     file_path = video.get("full_path")
     if not file_path or not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Arquivo físico do vídeo não encontrado")
+        raise HTTPException(status_code=404, detail="Physical video file not found")
 
     mime_type, _ = mimetypes.guess_type(file_path)
     if not mime_type:
@@ -6407,7 +7716,7 @@ async def get_video_thumbnail(video_id: str):
         except Exception:
             pass
 
-    raise HTTPException(status_code=404, detail="Thumbnail não encontrada ou não foi possível gerar")
+    raise HTTPException(status_code=404, detail="Thumbnail not found or could not be generated")
 
 
 @app.get("/api/videos/{video_id}/download")
@@ -6417,14 +7726,14 @@ async def download_video(video_id: str):
     import mimetypes
     video = video_service.get_video_by_id(video_id)
     if not video:
-        raise HTTPException(status_code=404, detail="Vídeo não encontrado")
+        raise HTTPException(status_code=404, detail="Video not found")
 
     local_exists = video.get("full_path") and os.path.exists(video["full_path"])
 
     if not local_exists:
         cloud_url = video.get("cloud_url")
         if not cloud_url or not cloud_url.startswith("http"):
-            raise HTTPException(status_code=404, detail="Vídeo não encontrado localmente nem na nuvem")
+            raise HTTPException(status_code=404, detail="Video not found locally or in cloud")
 
         from src.server.video_service import cloud_storage as _cs
         hf_token = _cs.token or os.getenv("HF_TOKEN", "")
@@ -6474,7 +7783,7 @@ async def create_video_folder(req: CreateFolderRequest):
     """Creates a new folder in data/videos/."""
     success = video_service.create_folder(req.name)
     if not success:
-        raise HTTPException(status_code=400, detail="Nome de pasta inválido ou pasta já existente")
+        raise HTTPException(status_code=400, detail="Invalid folder name or folder already exists")
     return {"success": True, "folders": video_service.list_folders()}
 
 
@@ -6483,7 +7792,7 @@ async def rename_video_folder(folder_name: str, req: RenameFolderRequest):
     """Renames an existing folder on disk."""
     success = video_service.rename_folder(folder_name, req.new_name)
     if not success:
-        raise HTTPException(status_code=400, detail="Não foi possível renomear a pasta")
+        raise HTTPException(status_code=400, detail="Could not rename folder")
     return {"success": True, "folders": video_service.list_folders()}
 
 
@@ -6492,7 +7801,7 @@ async def delete_video_folder(folder_name: str):
     """Deletes a folder, moving videos to 'Geral'."""
     success = video_service.delete_folder(folder_name)
     if not success:
-        raise HTTPException(status_code=400, detail="Pasta padrão 'Geral' não pode ser excluída ou pasta não encontrada")
+        raise HTTPException(status_code=400, detail="Default folder 'General' cannot be deleted or folder not found")
     return {"success": True, "folders": video_service.list_folders()}
 
 
@@ -6501,7 +7810,7 @@ async def rename_video(video_id: str, req: RenameVideoRequest):
     """Renames a video's display title."""
     success = video_service.rename_video(video_id, req.title)
     if not success:
-        raise HTTPException(status_code=404, detail="Vídeo não encontrado")
+        raise HTTPException(status_code=404, detail="Video not found")
     return {"success": True, "video": video_service.get_video_by_id(video_id)}
 
 
@@ -6510,7 +7819,7 @@ async def move_video(video_id: str, req: MoveVideoRequest):
     """Moves a video to another folder."""
     updated = video_service.move_video(video_id, req.target_folder)
     if not updated:
-        raise HTTPException(status_code=400, detail="Erro ao mover vídeo")
+        raise HTTPException(status_code=400, detail="Error moving video")
     return {"success": True, "video": updated}
 
 
@@ -6519,7 +7828,7 @@ async def toggle_video_favorite(video_id: str):
     """Toggles favorite state for a video."""
     video = video_service.get_video_by_id(video_id)
     if not video:
-        raise HTTPException(status_code=404, detail="Vídeo não encontrado")
+        raise HTTPException(status_code=404, detail="Video not found")
     new_fav = video_service.toggle_favorite(video_id)
     return {"success": True, "video_id": video_id, "is_favorite": new_fav}
 
@@ -6529,10 +7838,10 @@ async def delete_video(video_id: str):
     """Moves a video to the Trash Bin."""
     video = video_service.get_video_by_id(video_id)
     if not video:
-        raise HTTPException(status_code=404, detail="Vídeo não encontrado")
+        raise HTTPException(status_code=404, detail="Video not found")
     trash_item = trash_service.move_video_to_trash(video)
     if not trash_item:
-        raise HTTPException(status_code=500, detail="Erro ao mover vídeo para a lixeira")
+        raise HTTPException(status_code=500, detail="Error moving video to trash")
     
     # Remove from active video_service metadata
     meta = video_service._load_metadata()
@@ -6596,7 +7905,7 @@ async def stream_trash_video(trash_id: str):
     meta = trash_service._load_meta()
     item = meta.get(trash_id)
     if not item or item.get("type") != "video":
-        raise HTTPException(status_code=404, detail="Vídeo na lixeira não encontrado")
+        raise HTTPException(status_code=404, detail="Video in trash not found")
     trash_filename = item.get("metadata", {}).get("trash_filename")
     vpath = os.path.join(trash_service.trash_videos_dir, trash_filename) if trash_filename else ""
     return FileResponse(
@@ -6715,7 +8024,7 @@ async def _resolve_or_extract_album_for_multi(item: MultiAlbumItemInput) -> Albu
 async def multi_album_batch_save_to_library(req: MultiAlbumBatchSaveRequest):
     """Enfileira múltiplos álbuns selecionados para extração e salvamento direto na biblioteca com pasta designada."""
     if not req.albums:
-        raise HTTPException(status_code=400, detail="Nenhum álbum selecionado.")
+        raise HTTPException(status_code=400, detail="No albums selected.")
 
     target_folder = (req.folder or "Geral").strip() or "Geral"
     _ensure_album_folder_exists(target_folder)
@@ -6771,7 +8080,7 @@ async def multi_album_batch_download_zip(
 ):
     """Extrai e compacta múltiplos álbuns em um ZIP unificado ou individual."""
     if not req.albums:
-        raise HTTPException(status_code=400, detail="Nenhum álbum fornecido.")
+        raise HTTPException(status_code=400, detail="No albums provided.")
 
     from .safe_downloader import safe_downloader, _sanitize_filename
 
@@ -6781,7 +8090,7 @@ async def multi_album_batch_download_zip(
     valid_albums = [a for a in extracted_albums if isinstance(a, Album) and len(a.images) > 0]
 
     if not valid_albums:
-        raise HTTPException(status_code=400, detail="Nenhuma imagem pôde ser encontrada nos álbuns selecionados.")
+        raise HTTPException(status_code=400, detail="No images could be found in selected albums.")
 
     if req.format == "individual" and len(valid_albums) == 1:
         single_album = valid_albums[0]
@@ -6812,14 +8121,14 @@ async def multi_album_download_single_zip(
 ):
     """Extrai e baixa um único álbum em arquivo ZIP direto."""
     if not url or not url.startswith("http"):
-        raise HTTPException(status_code=400, detail="URL inválida.")
+        raise HTTPException(status_code=400, detail="Invalid URL.")
 
     from .safe_downloader import safe_downloader, _sanitize_filename
 
     item = MultiAlbumItemInput(title=title or "Álbum", url=url)
     album = await _resolve_or_extract_album_for_multi(item)
     if not album.images or len(album.images) == 0:
-        raise HTTPException(status_code=404, detail="Nenhuma imagem encontrada neste álbum.")
+        raise HTTPException(status_code=404, detail="No images found in this album.")
 
     zip_path = await safe_downloader.create_safe_zip(album, remove_exif=True, naming_pattern=None)
     clean_name = _sanitize_filename(album.title or title or "album")

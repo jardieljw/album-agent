@@ -1,3 +1,14 @@
+const getIsEn = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      const s = localStorage.getItem('imagex_settings');
+      if (s) return JSON.parse(s).language === 'en-US';
+    } catch (_) {}
+  }
+  return false;
+};
+import { translations } from "../i18n/translations";
+import { exitAllFullscreen } from "../services/desktopService";
 import { create } from 'zustand';
 import {
   Album,
@@ -58,13 +69,25 @@ const DEFAULT_SETTINGS: AppSettings = {
   zipCompressionLevel: 6,
   removeExifOnExport: false,
   askFolderOnSave: true,
-  defaultVideoFolder: 'Extraídos',
+  defaultVideoFolder: getIsEn() ? 'Extracted' : 'Extraídos',
   defaultAlbumFolder: 'Geral',
   redirectTagBehavior: 'navigate',
   aiChatProvider: 'gemini',
   ollamaBaseUrl: 'http://localhost:11434',
   selectedOllamaModel: 'llama3.2',
   geminiChatModel: 'gemini-3.7-flash',
+  lightboxOpenAnimation: 'expand',
+  imageSwitchAnimation: 'switch',
+  slideshowAnimation: 'switch',
+  fullscreenAnimation: 'elastic',
+  animationSpeed: 'normal',
+  animationDistance: 'normal',
+  disableAllAnimations: false,
+  viewTransitionAnimation: 'fade',
+  modalAnimation: 'scale',
+  drawerAnimation: 'slide',
+  taskDockAnimation: 'slide-up',
+  videoPlayerAnimation: 'zoom',
 };
 
 interface AppState {
@@ -115,7 +138,11 @@ interface AppState {
   // Modals & Drawers
   lightboxImage: ImageItem | null;
   lightboxAlbum: Album | null;
+  lightboxOriginRect: { x: number; y: number; width: number; height: number } | null;
+  lightboxAnimationMode: 'open' | 'switch' | 'fullscreen';
+  lightboxAnimCounter: number;
   slideshowOpen: boolean;
+  slideshowInitialIndex: number;
   contactSheetOpen: boolean;
   coPilotOpen: boolean;
   exportModalOpen: boolean;
@@ -155,7 +182,7 @@ interface AppState {
   } | null;
 
   // Video Actions
-  syncVideos: () => Promise<void>;
+  syncVideos: (healThumbnails?: boolean) => Promise<void>;
   uploadVideo: (file: File, folder?: string, fileIndex?: number, totalFiles?: number) => Promise<boolean>;
   importLocalPath: (path: string, folder?: string, mode?: 'copy' | 'move') => Promise<boolean>;
   openVideosFolder: (folder?: string) => Promise<boolean>;
@@ -216,6 +243,7 @@ interface AppState {
   removeImagesFromAlbum: (albumId: string, imageIds: string[]) => Promise<void> | void;
   renameAlbumImage: (albumId: string, imageId: string, newTitle: string) => Promise<boolean>;
   toggleFavoriteAlbum: (id: string) => void;
+  toggleFavoriteImage: (albumId: string, imageId: string) => void;
 
   addJob: (job: ExtractionJob) => void;
   updateJob: (id: string, updates: Partial<ExtractionJob>) => void;
@@ -251,9 +279,10 @@ interface AppState {
   clearSelectedAlbums: () => void;
 
   // Modal Triggers
-  openLightbox: (image: ImageItem, album?: Album) => void;
+  openLightbox: (image: ImageItem, album?: Album, originRect?: { x: number; y: number; width: number; height: number } | null) => void;
   closeLightbox: () => void;
-  setSlideshowOpen: (open: boolean) => void;
+  setLightboxFullscreen: (fullscreen: boolean) => void;
+  setSlideshowOpen: (open: boolean, initialIndex?: number) => void;
   setContactSheetOpen: (open: boolean) => void;
   setCoPilotOpen: (open: boolean) => void;
   openExportModal: (album: Album) => void;
@@ -350,19 +379,19 @@ export const mapServerJobToExtractionJob = (raw: any): ExtractionJob => {
   const isVideoSave = raw.mode === 'video_save' || raw.engine_type === 'video_downloader';
   const isFinished = raw.status === 'completed';
   const progStatus = String(raw.progress?.status || '');
-  const isPaused = raw.status === 'paused' || progStatus.toLowerCase().includes('pausad');
-  const isQueued = !isFinished && !isPaused && (
+  const isCancelled = raw.status === 'cancelled' || progStatus.toLowerCase().includes('cancelad');
+  const isFailed = raw.status === 'failed' || raw.status === 'error';
+  const isPaused = !isFinished && !isCancelled && !isFailed && (
+    raw.status === 'paused' || progStatus.toLowerCase().includes('pausad')
+  );
+  const isQueued = !isFinished && !isCancelled && !isFailed && !isPaused && (
     raw.status === 'queued' ||
     progStatus.includes('Na fila') ||
     progStatus.includes('Aguardando')
   );
-  const isActivelyWorking = !isFinished && !isPaused && (
+  const isActivelyWorking = !isFinished && !isCancelled && !isFailed && !isPaused && !isQueued && (
     raw.status === 'running' ||
     raw.status === 'active' ||
-    isQueued ||
-    (raw.downloaded_bytes && raw.downloaded_bytes > 0 && !isFinished) ||
-    (raw.progress?.current && raw.progress?.current > 0 && !isFinished) ||
-    (raw.progress?.percent !== undefined && raw.progress.percent > 0 && !isFinished) ||
     progStatus.includes('Baixando') ||
     progStatus.includes('Reconectando') ||
     progStatus.includes('motor resiliente') ||
@@ -373,11 +402,23 @@ export const mapServerJobToExtractionJob = (raw: any): ExtractionJob => {
     progStatus.includes('Resolved') ||
     progStatus.includes('Álbum') ||
     progStatus.includes('Buscando') ||
-    progStatus.includes('Analisando') ||
-    progStatus.includes('Queued')
+    progStatus.includes('Analisando')
   );
-  const isCancelled = !isActivelyWorking && !isPaused && raw.status === 'cancelled';
-  const isError = !isActivelyWorking && !isPaused && (raw.status === 'error' || raw.status === 'failed');
+
+  const status = isFinished
+    ? 'completed'
+    : isCancelled
+    ? 'cancelled'
+    : isFailed
+    ? 'failed'
+    : isPaused
+    ? 'paused'
+    : isQueued
+    ? 'queued'
+    : isActivelyWorking
+    ? 'active'
+    : (raw.status || 'paused');
+
   const total = isVideoSave ? (raw.total_bytes || raw.progress?.total_bytes || 1) : (raw.progress?.total || raw.resolved_count || 1);
   const current = isVideoSave ? (raw.downloaded_bytes || raw.progress?.downloaded_bytes || 0) : (raw.progress?.current || raw.resolved_count || 0);
   const percent = isFinished ? 100 : (raw.progress?.percent !== undefined ? raw.progress.percent : Math.round((current / Math.max(1, total)) * 100));
@@ -389,14 +430,14 @@ export const mapServerJobToExtractionJob = (raw: any): ExtractionJob => {
   return {
     id: raw.session_id,
     url: raw.url,
-    title: raw.progress?.title || (isVideoSave ? 'Salvar Vídeo' : `Extração: ${domain}`),
-    status: isFinished ? 'completed' : isPaused ? 'paused' : isQueued ? 'queued' : isActivelyWorking ? 'active' : isCancelled ? 'cancelled' : isError ? 'failed' : 'active',
+    title: raw.progress?.title || (isVideoSave ? (getIsEn() ? 'Save Video' : 'Salvar Vídeo') : (getIsEn() ? `Extraction: ${domain}` : `Extração: ${domain}`)),
+    status,
     mode: (raw.mode || raw.engine_type || 'ai_react') as any,
     progressPercent: isFinished ? 100 : Math.min(99, Math.max(1, percent)),
     discoveredImagesCount: isVideoSave ? 1 : total,
     resolvedOriginalCount: isVideoSave ? (isFinished ? 1 : 0) : current,
     failedCount: 0,
-    currentStage: isFinished ? (isVideoSave ? 'Vídeo Salvo com Sucesso!' : 'Extração 100% Concluída!') : (raw.progress?.status || (isPaused ? 'Pausado pelo usuário' : 'Processando em segundo plano...')),
+    currentStage: isFinished ? (isVideoSave ? (getIsEn() ? 'Video Saved Successfully!' : 'Vídeo Salvo com Sucesso!') : (getIsEn() ? 'Extraction 100% Completed!' : 'Extração 100% Concluída!')) : (raw.progress?.status || (isPaused ? (getIsEn() ? 'Paused by user' : 'Pausado pelo usuário') : isCancelled ? (getIsEn() ? 'Cancelled by user' : 'Cancelado pelo usuário') : (getIsEn() ? 'Processing in background...' : 'Processando em segundo plano...'))),
     startTime: raw.started_at || new Date().toISOString(),
     durationSeconds: raw.duration_seconds || (isFinished ? Math.max(2, current * 1.5) : 0),
     throughputMbps: raw.throughput_mbps || raw.progress?.throughput_mbps || (current > 0 && (raw.duration_seconds || 1) > 0 ? parseFloat(((current * 2.8) / (raw.duration_seconds || 1)).toFixed(1)) : 0),
@@ -405,7 +446,7 @@ export const mapServerJobToExtractionJob = (raw: any): ExtractionJob => {
     resultAlbumId: isVideoSave ? undefined : (isFinished ? raw.session_id : undefined),
     downloadedBytes: raw.downloaded_bytes || raw.progress?.downloaded_bytes || 0,
     totalBytes: raw.total_bytes || raw.progress?.total_bytes || 0,
-    folder: raw.folder || 'Extraídos',
+    folder: raw.folder || (getIsEn() ? 'Extracted' : 'Extraídos'),
     videoId: raw.video_id
   };
 };
@@ -477,7 +518,7 @@ export const useAppStore = create<AppState>((set, get) => {
   // Load initial settings, tabs, filters, and history from localStorage if available
   let savedSettings = DEFAULT_SETTINGS;
   let savedTabs: SessionTab[] = [
-    { id: 'tab-home-default', title: 'Início', viewId: 'home', isClosable: false }
+    { id: 'tab-home-default', title: getIsEn() ? 'Home' : 'Início', viewId: 'home', isClosable: false }
   ];
   let savedActiveTabId = 'tab-home-default';
   let savedCurrentView: ViewId = 'home';
@@ -505,7 +546,7 @@ export const useAppStore = create<AppState>((set, get) => {
     url: '',
     scanResult: null,
     selectedIds: [],
-    targetFolder: 'Extraídos',
+    targetFolder: getIsEn() ? 'Extracted' : 'Extraídos',
     errorMsg: null
   };
 
@@ -649,7 +690,15 @@ export const useAppStore = create<AppState>((set, get) => {
     isDockMinimized: savedDockMinimized,
     isMobileBottomBarMinimized: false,
     sessionJobIds: [],
-    dismissedDockJobIds: [],
+    dismissedDockJobIds: (() => {
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem('imagex_dismissed_dock_jobs');
+          if (stored) return JSON.parse(stored);
+        } catch (_) {}
+      }
+      return [];
+    })(),
 
     setDockMinimized: (minimized: boolean) => {
       set({ isDockMinimized: minimized });
@@ -672,16 +721,32 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     dismissDockJob: (id: string) => {
-      set(state => ({
-        dismissedDockJobIds: Array.from(new Set([...state.dismissedDockJobIds, id]))
-      }));
+      set(state => {
+        const next = Array.from(new Set([...state.dismissedDockJobIds, id]));
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('imagex_dismissed_dock_jobs', JSON.stringify(next));
+          } catch (_) {}
+        }
+        return {
+          dismissedDockJobIds: next,
+          sessionJobIds: state.sessionJobIds.filter(jid => jid !== id)
+        };
+      });
     },
 
     dismissAllDockJobs: () => {
       set(state => {
         const currentIds = Array.from(new Set([...state.jobs.map(j => j.id), ...state.sessionJobIds]));
+        const next = Array.from(new Set([...state.dismissedDockJobIds, ...currentIds]));
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('imagex_dismissed_dock_jobs', JSON.stringify(next));
+          } catch (_) {}
+        }
         return {
-          dismissedDockJobIds: Array.from(new Set([...state.dismissedDockJobIds, ...currentIds]))
+          dismissedDockJobIds: next,
+          sessionJobIds: []
         };
       });
     },
@@ -700,7 +765,11 @@ export const useAppStore = create<AppState>((set, get) => {
 
     lightboxImage: null,
     lightboxAlbum: null,
+    lightboxOriginRect: null,
+    lightboxAnimationMode: 'open',
+    lightboxAnimCounter: 0,
     slideshowOpen: false,
+    slideshowInitialIndex: 0,
     contactSheetOpen: false,
     coPilotOpen: false,
     exportModalOpen: false,
@@ -817,9 +886,14 @@ export const useAppStore = create<AppState>((set, get) => {
             }
 
             const currentSessionIds = new Set(get().sessionJobIds);
+            const dismissedSet = new Set(get().dismissedDockJobIds);
             for (const j of mappedJobs) {
-              if (j.status === 'active' || j.status === 'queued' || j.status === 'paused') {
-                currentSessionIds.add(j.id);
+              if (j.status === 'active' || j.status === 'queued') {
+                if (!dismissedSet.has(j.id)) {
+                  currentSessionIds.add(j.id);
+                }
+              } else if (j.status === 'cancelled' || j.status === 'failed') {
+                currentSessionIds.delete(j.id);
               }
             }
 
@@ -913,7 +987,7 @@ export const useAppStore = create<AppState>((set, get) => {
                   get().updateJob(sessId, {
                     status: 'completed',
                     progressPercent: 100,
-                    currentStage: 'Extração 100% Concluída!',
+                    currentStage: getIsEn() ? 'Extraction 100% Completed!' : 'Extração 100% Concluída!',
                     resultAlbumId: finishedAlbum.id,
                     resolvedOriginalCount: finishedAlbum.images.length,
                     discoveredImagesCount: finishedAlbum.images.length
@@ -972,9 +1046,14 @@ export const useAppStore = create<AppState>((set, get) => {
           }
 
           const currentSessionIds = new Set(get().sessionJobIds);
+          const dismissedSet = new Set(get().dismissedDockJobIds);
           for (const j of mappedJobs) {
-            if (j.status === 'active' || j.status === 'queued' || j.status === 'paused') {
-              currentSessionIds.add(j.id);
+            if (j.status === 'active' || j.status === 'queued') {
+              if (!dismissedSet.has(j.id)) {
+                currentSessionIds.add(j.id);
+              }
+            } else if (j.status === 'cancelled' || j.status === 'failed') {
+              currentSessionIds.delete(j.id);
             }
           }
 
@@ -996,18 +1075,25 @@ export const useAppStore = create<AppState>((set, get) => {
             const isVid = (cj.mode as string) === 'video_save' || (cj.mode as string) === 'video_downloader';
             if (isVid) {
               await get().syncVideos();
+              const curLang = (get().settings?.language || 'pt-BR') as 'pt-BR' | 'en-US';
+              const tStore = translations[curLang]?.store || translations['pt-BR']?.store;
               get().addNotification({
-                title: 'Vídeo Salvo na Galeria',
-                message: `"${cj.title.replace(/^Salvar Vídeo:\s*/, '')}" foi salvo com sucesso na pasta "${cj.folder || 'Extraídos'}".`,
+                title: tStore?.videoSavedTitle || (curLang === 'en-US' ? 'Video Saved to Gallery' : 'Vídeo Salvo na Galeria'),
+                message: (tStore?.videoSavedMsg || '"{title}" foi salvo com sucesso na pasta "{folder}".')
+                  .replace('{title}', cj.title.replace(/^Salvar Vídeo:\s*/, ''))
+                  .replace('{folder}', cj.folder || (curLang === 'en-US' ? 'Extracted' : 'Extraídos')),
                 type: 'success',
                 linkViewId: 'videos'
               });
               soundEffects.success(get().settings.soundEnabled);
             } else {
               await get().syncAlbums();
+              const curLang = (get().settings?.language || 'pt-BR') as 'pt-BR' | 'en-US';
+              const tStore = translations[curLang]?.store || translations['pt-BR']?.store;
               get().addNotification({
-                title: 'Extração Concluída',
-                message: `"${cj.title.replace(/^Extração:\s*/, '')}" foi salvo com sucesso na Galeria.`,
+                title: tStore?.extractionCompleteTitle || (curLang === 'en-US' ? 'Extraction Complete' : 'Extração Concluída'),
+                message: (tStore?.extractionCompleteMsg || '"{title}" foi salvo com sucesso na Galeria.')
+                  .replace('{title}', cj.title.replace(/^Extração:\s*/, '')),
                 type: 'success',
                 linkViewId: 'gallery'
               });
@@ -1030,13 +1116,24 @@ export const useAppStore = create<AppState>((set, get) => {
               storedFavs = JSON.parse(localStorage.getItem('imagex_favorite_albums') || '[]');
             } catch (_) {}
           }
+          let storedImgFavs: string[] = [];
+          if (typeof window !== 'undefined') {
+            try {
+              storedImgFavs = JSON.parse(localStorage.getItem('imagex_favorite_images') || '[]');
+            } catch (_) {}
+          }
           const currentFavSet = new Set([
             ...get().albums.filter(a => a.isFavorite).map(a => a.id),
             ...storedFavs
           ]);
+          const favImgSet = new Set(storedImgFavs);
           const mergedAlbums = freshAlbums.map(a => ({
             ...a,
-            isFavorite: a.isFavorite || currentFavSet.has(a.id)
+            isFavorite: a.isFavorite || currentFavSet.has(a.id),
+            images: (a.images || []).map(i => ({
+              ...i,
+              isFavorite: (i as any).isFavorite || favImgSet.has(i.id)
+            }))
           }));
           set({ albums: mergedAlbums });
         }
@@ -1167,8 +1264,8 @@ export const useAppStore = create<AppState>((set, get) => {
             activeAlbumFolder: activeAlbumFolder === folderName ? null : activeAlbumFolder,
           });
           get().addNotification({
-            title: 'Pasta Excluída',
-            message: `Pasta "${folderName}" excluída. Álbuns movidos para "Geral".`,
+            title: get().settings?.language === 'en-US' ? 'Folder Deleted' : 'Pasta Excluída',
+            message: get().settings?.language === 'en-US' ? `Folder "${folderName}" deleted. Albums moved to "General".` : `Pasta "${folderName}" excluída. Álbuns movidos para "Geral".`,
             type: 'info',
           });
           return true;
@@ -1189,8 +1286,8 @@ export const useAppStore = create<AppState>((set, get) => {
           set({ albums: updatedAlbums });
           await get().syncAlbumFolders();
           get().addNotification({
-            title: 'Álbuns Movidos',
-            message: `${res.moved} álbum(ns) movido(s) para "${targetFolder}".`,
+            title: get().settings?.language === 'en-US' ? 'Albums Moved' : 'Álbuns Movidos',
+            message: get().settings?.language === 'en-US' ? `${res.moved} album(s) moved to "${targetFolder}".` : `${res.moved} álbum(ns) movido(s) para "${targetFolder}".`,
             type: 'success',
           });
           return true;
@@ -1252,7 +1349,7 @@ export const useAppStore = create<AppState>((set, get) => {
         url: '',
         scanResult: null,
         selectedIds: [],
-        targetFolder: 'Extraídos',
+        targetFolder: getIsEn() ? 'Extracted' : 'Extraídos',
         errorMsg: null
       };
       try {
@@ -1455,12 +1552,21 @@ export const useAppStore = create<AppState>((set, get) => {
           content: m.text
         }));
 
+      // Context of current application view
+      const { currentView, activeAlbumId, activeAlbumFolder, activeVideoFolder } = get();
+      const appContext = {
+        currentView,
+        activeAlbumId,
+        activeFolder: activeAlbumFolder || activeVideoFolder || 'Geral'
+      };
+
       try {
         const res = await backendApi.sendChatMessage(text, {
           provider: activeProvider,
           model: activeModel,
           ollamaUrl: settings.ollamaBaseUrl || 'http://localhost:11434',
-          conversationHistory: recentHistory
+          conversationHistory: recentHistory,
+          context: appContext
         });
 
         const agentMsg: ChatMessage = {
@@ -1474,11 +1580,50 @@ export const useAppStore = create<AppState>((set, get) => {
           provider: res?.provider || activeProvider,
           model: res?.model || activeModel,
           errorType: res?.error_type,
-          canFallback: res?.can_fallback
+          canFallback: res?.can_fallback,
+          mediaItems: res?.media_items || [],
+          executedTools: res?.executed_tools || [],
+          thoughtChain: res?.thought_chain || [],
+          clientAction: res?.client_action || undefined
         };
 
         set(state => ({ aiChatMessages: [...state.aiChatMessages, agentMsg] }));
         soundEffects.click(settings.soundEnabled);
+
+        // Auto-dispatch client actions requested by the Copilot Master Agent
+        if (res?.client_action) {
+          const act = res.client_action;
+          if (act.type === 'navigate' && act.view) {
+            const v = act.view.toLowerCase();
+            if (v === 'gallery' || v === 'albums') {
+              get().navigateToView('gallery');
+            } else if (v === 'videos') {
+              get().navigateToView('videos');
+            } else if (v === 'tasks' || v === 'jobs' || v === 'batch-queue') {
+              get().navigateToView('batch-queue');
+            } else if (v === 'trash') {
+              get().navigateToView('trash');
+            } else if (v === 'settings') {
+              get().navigateToView('settings');
+            } else if (v === 'album-detail' && act.target_id) {
+              get().navigateToView('album-detail', act.target_id);
+            }
+          } else if (act.type === 'filter') {
+            if (act.filter_type === 'search_query' && act.value) {
+              if (get().currentView === 'videos') {
+                set({ videoSearchQuery: act.value });
+              } else {
+                set({ gallerySearchQuery: act.value });
+              }
+            } else if (act.filter_type === 'color' && act.value) {
+              if (get().currentView === 'album-detail') {
+                set({ albumColorFilter: act.value });
+              } else {
+                set({ galleryColorFilter: act.value });
+              }
+            }
+          }
+        }
       } catch (err: any) {
         const errorMsg: ChatMessage = {
           id: `msg-a-${Date.now()}`,
@@ -1520,6 +1665,14 @@ export const useAppStore = create<AppState>((set, get) => {
         tabTitle = album
           ? (album.title.length > 24 ? album.title.slice(0, 24) + '...' : album.title)
           : (isPt ? 'Studio do Álbum' : 'Album Studio');
+
+        backendApi.fetchAlbumDetails(albumId).then(fresh => {
+          if (fresh && fresh.images && fresh.images.length > 0) {
+            set(state => ({
+              albums: state.albums.map(a => a.id === albumId ? fresh : a)
+            }));
+          }
+        }).catch(() => {});
       }
 
       const currentActiveTab = openTabs.find(t => t.id === get().activeTabId);
@@ -1704,7 +1857,7 @@ export const useAppStore = create<AppState>((set, get) => {
       try {
         const success = await backendApi.setAlbumCover(albumId, coverImageUrl);
         if (success) {
-          const safeUrl = (coverImageUrl.startsWith('http') && !coverImageUrl.includes('unsplash.com') && !/(?:static-ca-cdn|cdni\.[a-z0-9-]+\.com|\/galleries\/)/i.test(coverImageUrl))
+          const safeUrl = (coverImageUrl.startsWith('http') && !coverImageUrl.includes('unsplash.com'))
             ? `/api/proxy-image?url=${encodeURIComponent(coverImageUrl)}&referer=${encodeURIComponent(coverImageUrl)}`
             : coverImageUrl;
 
@@ -1717,8 +1870,8 @@ export const useAppStore = create<AppState>((set, get) => {
           }));
 
           get().addNotification({
-            title: 'Capa do Álbum Atualizada',
-            message: 'A miniatura deste álbum na galeria foi alterada com sucesso.',
+            title: get().settings?.language === 'en-US' ? 'Album Cover Updated' : 'Capa do Álbum Atualizada',
+            message: get().settings?.language === 'en-US' ? 'Album thumbnail updated successfully.' : 'A miniatura deste álbum na galeria foi alterada com sucesso.',
             type: 'success'
           });
           return true;
@@ -1740,8 +1893,8 @@ export const useAppStore = create<AppState>((set, get) => {
         openTabs: state.openTabs.filter(t => t.albumId !== id)
       }));
       get().addNotification({
-        title: 'Álbum Movido para a Lixeira',
-        message: 'O álbum foi enviado para a lixeira do app e pode ser restaurado a qualquer momento.',
+        title: get().settings?.language === 'en-US' ? 'Album Moved to Trash' : 'Álbum Movido para a Lixeira',
+        message: get().settings?.language === 'en-US' ? 'Album moved to trash and can be restored at any time.' : 'O álbum foi enviado para a lixeira do app e pode ser restaurado a qualquer momento.',
         type: 'warning'
       });
     },
@@ -1758,13 +1911,13 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         get().addNotification({
           title: 'Streams Renovados',
-          message: 'Os links de vídeo foram atualizados com sucesso.',
+          message: get().settings?.language === 'en-US' ? 'Video links updated successfully.' : 'Os links de vídeo foram atualizados com sucesso.',
           type: 'success'
         });
       } else {
         get().addNotification({
           title: 'Falha ao Renovar Streams',
-          message: 'Não foi possível obter novos links. Tente novamente mais tarde.',
+          message: get().settings?.language === 'en-US' ? 'Could not obtain new links. Try again later.' : 'Não foi possível obter novos links. Tente novamente mais tarde.',
           type: 'error'
         });
       }
@@ -1821,6 +1974,53 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     },
 
+    toggleFavoriteImage: (albumId, imageId) => {
+      let storedFavs: string[] = [];
+      if (typeof window !== 'undefined') {
+        try {
+          storedFavs = JSON.parse(localStorage.getItem('imagex_favorite_images') || '[]');
+        } catch (_) {}
+      }
+
+      const favSet = new Set(storedFavs);
+      const currentAlbums = get().albums;
+      const album = currentAlbums.find(a => a.id === albumId);
+      const img = (album?.images || []).find(i => i.id === imageId);
+      const newFavState = img ? !(img as any).isFavorite : !favSet.has(imageId);
+
+      if (newFavState) {
+        favSet.add(imageId);
+      } else {
+        favSet.delete(imageId);
+      }
+
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('imagex_favorite_images', JSON.stringify(Array.from(favSet)));
+        } catch (_) {}
+      }
+
+      set(state => {
+        const updatedAlbums = state.albums.map(a => {
+          if (a.id !== albumId) return a;
+          const updatedImages = (a.images || []).map(i =>
+            i.id === imageId ? { ...i, isFavorite: newFavState } : i
+          );
+          return { ...a, images: updatedImages };
+        });
+
+        const updatedLightboxImage =
+          state.lightboxImage && state.lightboxImage.id === imageId
+            ? { ...state.lightboxImage, isFavorite: newFavState }
+            : state.lightboxImage;
+
+        return {
+          albums: updatedAlbums,
+          lightboxImage: updatedLightboxImage
+        };
+      });
+    },
+
 
     addJob: (job) => {
       set(state => {
@@ -1858,10 +2058,22 @@ export const useAppStore = create<AppState>((set, get) => {
         activeSSESubscriptions.delete(id);
       }
       set(state => {
-        const updatedJobs = state.jobs.map(j => (j.id === id ? { ...j, status: 'cancelled' as const, currentStage: 'Cancelado pelo usuário' } : j));
+        const updatedJobs = state.jobs.map(j => (j.id === id ? { ...j, status: 'cancelled' as const, currentStage: getIsEn() ? 'Cancelled by user' : 'Cancelado pelo usuário' } : j));
         const activeJobs = updatedJobs.filter(j => j.status === 'active' || j.status === 'paused');
         const updatedActive = state.activeJob?.id === id ? (activeJobs[0] || null) : state.activeJob;
-        return { jobs: updatedJobs, activeJob: updatedActive, activeJobs };
+        const nextDismissed = Array.from(new Set([...state.dismissedDockJobIds, id]));
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('imagex_dismissed_dock_jobs', JSON.stringify(nextDismissed));
+          } catch (_) {}
+        }
+        return {
+          jobs: updatedJobs,
+          activeJob: updatedActive,
+          activeJobs,
+          dismissedDockJobIds: nextDismissed,
+          sessionJobIds: state.sessionJobIds.filter(jid => jid !== id)
+        };
       });
       get().addNotification({
         title: 'Job Cancelado',
@@ -1875,9 +2087,9 @@ export const useAppStore = create<AppState>((set, get) => {
         await backendApi.pauseJob(id);
       } catch (_) {}
       set(state => {
-        const updatedJobs = state.jobs.map(j => (j.id === id ? { ...j, status: 'paused' as any, currentStage: 'Pausado pelo usuário' } : j));
+        const updatedJobs = state.jobs.map(j => (j.id === id ? { ...j, status: 'paused' as any, currentStage: getIsEn() ? 'Paused by user' : 'Pausado pelo usuário' } : j));
         const activeJobs = updatedJobs.filter(j => j.status === 'active' || j.status === 'paused');
-        const updatedActive = state.activeJob?.id === id ? { ...state.activeJob, status: 'paused' as any, currentStage: 'Pausado pelo usuário' } : state.activeJob;
+        const updatedActive = state.activeJob?.id === id ? { ...state.activeJob, status: 'paused' as any, currentStage: getIsEn() ? 'Paused by user' : 'Pausado pelo usuário' } : state.activeJob;
         return { jobs: updatedJobs, activeJob: updatedActive, activeJobs };
       });
       get().addNotification({
@@ -1895,8 +2107,23 @@ export const useAppStore = create<AppState>((set, get) => {
         const updatedJobs = state.jobs.map(j => (j.id === id ? { ...j, status: 'active' as const, currentStage: 'Retomando download...' } : j));
         const activeJobs = updatedJobs.filter(j => j.status === 'active' || j.status === 'paused');
         const updatedActive = state.activeJob?.id === id ? { ...state.activeJob, status: 'active' as const, currentStage: 'Retomando download...' } : state.activeJob;
-        return { jobs: updatedJobs, activeJob: updatedActive, activeJobs };
+        const nextDismissed = state.dismissedDockJobIds.filter(dId => dId !== id);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('imagex_dismissed_dock_jobs', JSON.stringify(nextDismissed));
+          } catch (_) {}
+        }
+        return {
+          jobs: updatedJobs,
+          activeJob: updatedActive,
+          activeJobs,
+          sessionJobIds: Array.from(new Set([...state.sessionJobIds, id])),
+          dismissedDockJobIds: nextDismissed
+        };
       });
+      setTimeout(() => {
+        get().syncJobs();
+      }, 500);
       get().addNotification({
         title: 'Job Retomado',
         message: `A tarefa #${id} foi retomada com sucesso.`,
@@ -1944,7 +2171,7 @@ export const useAppStore = create<AppState>((set, get) => {
             mode: (job.mode as any) || 'ai_react',
             aiModel: job.aiModel || `${settings.geminiModel || 'gemini-3.7-flash'} + ${settings.aiModel}`,
             progressPercent: 5,
-            currentStage: 'Iniciando extração em segundo plano...',
+            currentStage: getIsEn() ? 'Starting extraction in background...' : 'Iniciando extração em segundo plano...',
             discoveredImagesCount: 0,
             resolvedOriginalCount: 0,
             failedCount: 0,
@@ -1960,8 +2187,8 @@ export const useAppStore = create<AppState>((set, get) => {
           get().subscribeToJob(res.session_id, job.url);
           triggerJobsPollingLoop();
           get().addNotification({
-            title: 'Re-execução Iniciada',
-            message: `Extração para "${job.title || job.url}" reiniciada automaticamente em segundo plano.`,
+            title: get().settings?.language === 'en-US' ? 'Re-execution Started' : 'Re-execução Iniciada',
+            message: get().settings?.language === 'en-US' ? `Extraction for "${job.title || job.url}" restarted in background.` : `Extração para "${job.title || job.url}" reiniciada automaticamente em segundo plano.`,
             type: 'info'
           });
           return true;
@@ -1971,7 +2198,7 @@ export const useAppStore = create<AppState>((set, get) => {
         console.error('Failed to retry extraction job:', err);
         get().addNotification({
           title: 'Falha ao Re-executar',
-          message: err?.message || 'Erro de conexão com o servidor ao re-executar tarefa.',
+          message: err?.message || (get().settings?.language === 'en-US' ? 'Server connection error while restarting task.' : 'Erro de conexão com o servidor ao re-executar tarefa.'),
           type: 'error'
         });
         return false;
@@ -2165,7 +2392,7 @@ export const useAppStore = create<AppState>((set, get) => {
           get().updateJob(sessionId, {
             status: 'completed',
             progressPercent: 100,
-            currentStage: 'Extração 100% Concluída!',
+            currentStage: getIsEn() ? 'Extraction 100% Completed!' : 'Extração 100% Concluída!',
             resultAlbumId: finishedAlbum.id,
             resolvedOriginalCount: finishedAlbum.images.length,
             discoveredImagesCount: finishedAlbum.images.length
@@ -2294,14 +2521,38 @@ export const useAppStore = create<AppState>((set, get) => {
     selectAllAlbums: (allIds) => set({ selectedAlbumIds: allIds }),
     clearSelectedAlbums: () => set({ selectedAlbumIds: [] }),
 
-    openLightbox: (image, album) => {
-      const { settings } = get();
+    openLightbox: (image, album, originRect) => {
+      const { settings, lightboxImage } = get();
       soundEffects.whoosh(settings.soundEnabled);
-      set({ lightboxImage: image, lightboxAlbum: album || null });
+      const isAlreadyOpen = Boolean(lightboxImage);
+      set({
+        lightboxImage: image,
+        lightboxAlbum: album || null,
+        lightboxOriginRect: isAlreadyOpen ? null : (originRect || null),
+        lightboxAnimationMode: isAlreadyOpen ? 'switch' : 'open',
+        lightboxAnimCounter: (get().lightboxAnimCounter || 0) + 1,
+      });
     },
-    closeLightbox: () => set({ lightboxImage: null, lightboxAlbum: null }),
+    closeLightbox: () => {
+      exitAllFullscreen();
+      set({
+        lightboxImage: null,
+        lightboxAlbum: null,
+        lightboxOriginRect: null,
+        lightboxAnimationMode: 'open',
+      });
+    },
+    setLightboxFullscreen: (fullscreen) => {
+      set({
+        lightboxAnimationMode: fullscreen ? 'fullscreen' : 'switch',
+        lightboxAnimCounter: (get().lightboxAnimCounter || 0) + 1,
+      });
+    },
 
-    setSlideshowOpen: (open) => set({ slideshowOpen: open }),
+    setSlideshowOpen: (open, initialIndex = 0) => {
+      if (!open) exitAllFullscreen();
+      set({ slideshowOpen: open, slideshowInitialIndex: Math.max(0, initialIndex) });
+    },
     setContactSheetOpen: (open) => set({ contactSheetOpen: open }),
 
     setCoPilotOpen: (open) => set({ coPilotOpen: open }),
@@ -2365,9 +2616,9 @@ export const useAppStore = create<AppState>((set, get) => {
     // ==========================================
     // Video Gallery Actions
     // ==========================================
-    syncVideos: async () => {
+    syncVideos: async (healThumbnails: boolean = false) => {
       try {
-        const { videos, folders } = await backendApi.fetchVideos();
+        const { videos, folders } = await backendApi.fetchVideos(healThumbnails);
         set({ videos, videoFolders: folders });
       } catch (err) {
         console.warn('Failed to sync videos:', err);
@@ -2412,15 +2663,15 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().syncVideos();
         soundEffects.success(settings.soundEnabled);
         get().addNotification({
-          title: 'Vídeo Importado',
-          message: `O vídeo "${res.title}" foi importado com sucesso na pasta ${res.folder}.`,
+          title: get().settings?.language === 'en-US' ? 'Video Imported' : 'Vídeo Importado',
+          message: get().settings?.language === 'en-US' ? `Video "${res.title}" imported successfully into folder ${res.folder}.` : `O vídeo "${res.title}" foi importado com sucesso na pasta ${res.folder}.`,
           type: 'success'
         });
         return true;
       } else {
         get().addNotification({
-          title: 'Falha na Importação',
-          message: `Não foi possível importar o vídeo "${file.name}".`,
+          title: get().settings?.language === 'en-US' ? 'Import Failed' : 'Falha na Importação',
+          message: get().settings?.language === 'en-US' ? `Could not import video "${file.name}".` : `Não foi possível importar o vídeo "${file.name}".`,
           type: 'error'
         });
         return false;
@@ -2435,15 +2686,15 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().syncVideos();
         soundEffects.success(settings.soundEnabled);
         get().addNotification({
-          title: 'Importação Instantânea',
-          message: `${res.count} vídeo(s) importado(s) com sucesso na pasta ${folder}.`,
+          title: get().settings?.language === 'en-US' ? 'Instant Import' : 'Importação Instantânea',
+          message: get().settings?.language === 'en-US' ? `${res.count} video(s) imported successfully into folder ${folder}.` : `${res.count} vídeo(s) importado(s) com sucesso na pasta ${folder}.`,
           type: 'success'
         });
         return true;
       } else {
         get().addNotification({
-          title: 'Erro na Importação Local',
-          message: res.error || 'Nenhum vídeo compatível encontrado no caminho especificado.',
+          title: get().settings?.language === 'en-US' ? 'Local Import Error' : 'Erro na Importação Local',
+          message: res.error || (get().settings?.language === 'en-US' ? 'No compatible videos found at specified path.' : 'Nenhum vídeo compatível encontrado no caminho especificado.'),
           type: 'error'
         });
         return false;
@@ -2470,7 +2721,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (res) {
         await get().syncVideos();
         get().addNotification({
-          title: streamOnly ? 'Stream Remoto Adicionado' : 'Vídeo Baixado',
+          title: get().settings?.language === 'en-US' ? (streamOnly ? 'Remote Stream Added' : 'Video Downloaded') : (streamOnly ? 'Stream Remoto Adicionado' : 'Vídeo Baixado'),
           message: streamOnly
             ? `Vídeo remoto "${res.title}" adicionado para reprodução sem ocupar espaço local.`
             : `Vídeo "${res.title}" salvo na pasta ${res.folder}.`,
@@ -2491,15 +2742,20 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ albums });
         await get().syncAlbumFolders();
         soundEffects.success(settings.soundEnabled);
+        const curLang = (get().settings?.language || 'pt-BR') as 'pt-BR' | 'en-US';
+        const tStore = translations[curLang]?.store || translations['pt-BR']?.store;
         get().addNotification({
-          title: 'Álbum Criado!',
-          message: `O álbum "${title}" com ${files.length} fotos foi adicionado na pasta "${targetFolder}".`,
+          title: tStore?.albumCreatedTitle || (curLang === 'en-US' ? 'Album Created!' : 'Álbum Criado!'),
+          message: (tStore?.albumCreatedMsg || 'O álbum "{title}" com {count} fotos foi adicionado na pasta "{folder}".')
+            .replace('{title}', title)
+            .replace('{count}', String(files.length))
+            .replace('{folder}', targetFolder),
           type: 'success'
         });
         return true;
       } else {
         get().addNotification({
-          title: 'Erro ao Criar Álbum',
+          title: get().settings?.language === 'en-US' ? 'Error Creating Album' : 'Erro ao Criar Álbum',
           message: res?.error || 'Falha no envio das imagens.',
           type: 'error'
         });
@@ -2552,7 +2808,7 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         await get().syncVideos();
         get().addNotification({
-          title: 'Pasta Excluída',
+          title: get().settings?.language === 'en-US' ? 'Folder Deleted' : 'Pasta Excluída',
           message: `Pasta "${folderName}" excluída. Os vídeos foram movidos para a pasta Geral.`,
           type: 'info'
         });
@@ -2568,8 +2824,8 @@ export const useAppStore = create<AppState>((set, get) => {
       if (ok) {
         await get().syncVideos();
         get().addNotification({
-          title: 'Vídeo Renomeado',
-          message: `Título alterado para "${title}".`,
+          title: get().settings?.language === 'en-US' ? 'Video Renamed' : 'Vídeo Renomeado',
+          message: get().settings?.language === 'en-US' ? `Title changed to "${title}".` : `Título alterado para "${title}".`,
           type: 'success'
         });
         return true;
@@ -2584,8 +2840,8 @@ export const useAppStore = create<AppState>((set, get) => {
       if (ok) {
         await get().syncVideos();
         get().addNotification({
-          title: 'Vídeo Movido',
-          message: `Vídeo movido para a pasta "${targetFolder}".`,
+          title: get().settings?.language === 'en-US' ? 'Video Moved' : 'Vídeo Movido',
+          message: get().settings?.language === 'en-US' ? `Video moved to folder "${targetFolder}".` : `Vídeo movido para a pasta "${targetFolder}".`,
           type: 'success'
         });
         return true;
@@ -2617,8 +2873,8 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().syncVideos();
         await get().fetchTrash();
         get().addNotification({
-          title: 'Vídeo Movido para a Lixeira',
-          message: 'O vídeo foi enviado para a lixeira do app e pode ser restaurado a qualquer momento.',
+          title: get().settings?.language === 'en-US' ? 'Video Moved to Trash' : 'Vídeo Movido para a Lixeira',
+          message: get().settings?.language === 'en-US' ? 'Video moved to trash and can be restored at any time.' : 'O vídeo foi enviado para a lixeira do app e pode ser restaurado a qualquer momento.',
           type: 'warning'
         });
         return true;
@@ -2654,8 +2910,8 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().syncVideos();
         await get().fetchTrash();
         get().addNotification({
-          title: 'Vídeos Movidos para a Lixeira',
-          message: `${deleted.length} vídeo(s) foram enviados para a lixeira do app.`,
+          title: get().settings?.language === 'en-US' ? 'Videos Moved to Trash' : 'Vídeos Movidos para a Lixeira',
+          message: get().settings?.language === 'en-US' ? `${deleted.length} video(s) moved to trash.` : `${deleted.length} vídeo(s) foram enviados para a lixeira do app.`,
           type: 'warning'
         });
         return true;
@@ -2669,8 +2925,8 @@ export const useAppStore = create<AppState>((set, get) => {
         await get().syncVideos();
         set({ selectedVideoIds: [] });
         get().addNotification({
-          title: 'Vídeos Transferidos',
-          message: `${moved.length} vídeo(s) movido(s) para a pasta "${targetFolder}".`,
+          title: get().settings?.language === 'en-US' ? 'Videos Transferred' : 'Vídeos Transferidos',
+          message: get().settings?.language === 'en-US' ? `${moved.length} video(s) moved to folder "${targetFolder}".` : `${moved.length} vídeo(s) movido(s) para a pasta "${targetFolder}".`,
           type: 'success'
         });
         return true;
@@ -2681,7 +2937,10 @@ export const useAppStore = create<AppState>((set, get) => {
     setActiveVideoFolder: (folder) => set({ activeVideoFolder: folder }),
     setVideoSearchQuery: (query) => set({ videoSearchQuery: query }),
     setVideoFilterFavoritesOnly: (favOnly) => set({ videoFilterFavoritesOnly: favOnly }),
-    setActivePlayingVideo: (video) => set({ activePlayingVideo: video }),
+    setActivePlayingVideo: (video) => {
+      if (!video) exitAllFullscreen();
+      set({ activePlayingVideo: video });
+    },
     setActiveFolderModal: (modal) => set({ activeFolderModal: modal }),
 
     // Trash Bin Actions
@@ -2706,9 +2965,12 @@ export const useAppStore = create<AppState>((set, get) => {
             selectedTrashIds: state.selectedTrashIds.filter(id => !restored.includes(id))
           }));
           await Promise.all([get().fetchTrash(), get().syncVideos()]);
+          const curLang = (get().settings?.language || 'pt-BR') as 'pt-BR' | 'en-US';
+          const tStore = translations[curLang]?.store || translations['pt-BR']?.store;
           get().addNotification({
-            title: 'Itens Restaurados',
-            message: `${restored.length} item(ns) restaurado(s) com sucesso para o local original.`,
+            title: tStore?.itemsRestoredTitle || (curLang === 'en-US' ? 'Items Restored' : 'Itens Restaurados'),
+            message: (tStore?.itemsRestoredMsg || '{count} item(ns) restaurado(s) com sucesso para o local original.')
+              .replace('{count}', String(restored.length)),
             type: 'success'
           });
           return true;
@@ -2731,8 +2993,8 @@ export const useAppStore = create<AppState>((set, get) => {
             selectedTrashIds: state.selectedTrashIds.filter(id => !deleted.includes(id))
           }));
           get().addNotification({
-            title: 'Exclusão Permanente',
-            message: `${deleted.length} item(ns) excluído(s) definitivamente do disco.`,
+            title: get().settings?.language === 'en-US' ? 'Permanent Deletion' : 'Exclusão Permanente',
+            message: get().settings?.language === 'en-US' ? `${deleted.length} item(s) permanently deleted from disk.` : `${deleted.length} item(ns) excluído(s) definitivamente do disco.`,
             type: 'info'
           });
           return true;
@@ -2845,7 +3107,7 @@ export const useAppStore = create<AppState>((set, get) => {
           }));
           get().addNotification({
             title: 'Download Iniciado em 2º Plano',
-            message: `"${title || 'Vídeo'}" está sendo salvo. Acompanhe o progresso na Gestão de Tarefas.`,
+            message: get().settings?.language === 'en-US' ? `"${title || 'Video'}" is being saved. Follow progress in Tasks.` : `"${title || 'Vídeo'}" está sendo salvo. Acompanhe o progresso na Gestão de Tarefas.`,
             type: 'info'
           });
           triggerJobsPollingLoop();
@@ -2869,7 +3131,7 @@ export const useAppStore = create<AppState>((set, get) => {
         } else {
           get().addNotification({
             title: 'Erro ao Iniciar Salvamento',
-            message: result.error || 'Não foi possível iniciar o download do vídeo.',
+            message: result.error || (get().settings?.language === 'en-US' ? 'Could not start video download.' : 'Não foi possível iniciar o download do vídeo.'),
             type: 'error'
           });
           return false;

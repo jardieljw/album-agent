@@ -32,10 +32,12 @@ import {
   FolderHeart
 } from 'lucide-react';
 import { useAppStore, getCanonicalMediaFingerprint } from '../../store/useAppStore';
+import { backendApi } from '../../services/realApi';
 import { VideoItem, Album } from '../../types';
 import { formatFileSize } from '../../utils/formatters';
 import { translations } from '../../i18n/translations';
 import { IconBadge } from '../common/IconBadge';
+import { ModalPortal } from '../common/ModalPortal';
 
 const getVideoResolutionLabel = (video?: Partial<VideoItem>, title?: string, filename?: string) => {
   const h = video?.height || 0;
@@ -107,8 +109,10 @@ export const VideosView: React.FC = () => {
     highlightedItemId,
     albums,
     setActiveAlbumFolder,
+    addNotification,
     settings
   } = useAppStore();
+  const isEn = settings?.language === 'en-US';
 
   const t = translations[settings.language]?.videos || translations['en-US'].videos;
 
@@ -164,6 +168,7 @@ export const VideosView: React.FC = () => {
   const [localImportFolder, setLocalImportFolder] = useState<string>('Geral');
   const [isImportingLocal, setIsImportingLocal] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [thumbRefreshKey, setThumbRefreshKey] = useState<number>(0);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [playingVideoIds, setPlayingVideoIds] = useState<string[]>([]);
   const [videoOriginFilter, setVideoOriginFilter] = useState<'all' | 'pc' | 'web'>('all');
@@ -309,7 +314,19 @@ export const VideosView: React.FC = () => {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      await syncVideos();
+      await syncVideos(true);
+      setThumbRefreshKey(Date.now());
+      addNotification({
+        title: isEn ? 'Sync & Thumbnail Generation' : 'Sincronização & Miniaturas',
+        message: isEn
+          ? 'Scanning disk and generating smart action thumbnails for missing videos in background...'
+          : 'Sincronizando vídeos e gerando miniaturas inteligentes de ação em segundo plano...',
+        type: 'info'
+      });
+      // Programar atualizações automáticas da interface para exibir as novas capas à medida que forem salvas
+      setTimeout(() => setThumbRefreshKey(Date.now()), 4000);
+      setTimeout(() => setThumbRefreshKey(Date.now()), 10000);
+      setTimeout(() => setThumbRefreshKey(Date.now()), 18000);
     } finally {
       setTimeout(() => setIsSyncing(false), 500);
     }
@@ -634,7 +651,7 @@ export const VideosView: React.FC = () => {
                       ? 'bg-violet-600 text-white border-violet-400'
                       : 'bg-surface hover:bg-surface-elevated text-slate-400 border-border'
                   }`}
-                  title={isFolderSelected ? 'Desmarcar pasta' : 'Selecionar pasta'}
+                  title={isFolderSelected ? (t.deselectFolder || "Deselect folder") : (t.selectFolder || "Select folder")}
                 >
                   {isFolderSelected ? <Check size={12} strokeWidth={3} /> : <Square size={12} />}
                 </button>
@@ -684,7 +701,7 @@ export const VideosView: React.FC = () => {
                       ? 'bg-brand-600 text-white border-brand-500'
                       : 'hover:bg-white/10 text-slate-400 hover:text-white border-transparent'
                   }`}
-                  title="Ações da Pasta"
+                  title={t.actions || "Folder Actions"}
                 >
                   <MoreVertical size={13} />
                 </button>
@@ -800,7 +817,7 @@ export const VideosView: React.FC = () => {
                 ? 'bg-amber-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
-            title="Vídeos importados do seu computador (Upload ou Importar do PC)"
+            title={t.importedFromPcTooltip || "Videos imported from your computer"}
           >
             <HardDrive size={13} />
             <span>{t.originPc} ({videos.filter(v => !isVideoWebOrigin(v)).length})</span>
@@ -813,7 +830,7 @@ export const VideosView: React.FC = () => {
                 ? 'bg-sky-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
-            title="Vídeos extraídos da Web / Scraper ou Streaming"
+            title={t.webScrapedTooltip || "Videos extracted from Web / Scraper or Streaming"}
           >
             <ExternalLink size={13} />
             <span>{t.originWeb} ({videos.filter(v => isVideoWebOrigin(v)).length})</span>
@@ -837,18 +854,18 @@ export const VideosView: React.FC = () => {
           <div className="p-4 rounded-full bg-surface-elevated text-slate-500 border border-border">
             <FileVideo size={36} />
           </div>
-          <h3 className="text-base font-bold text-slate-200">Nenhum vídeo encontrado</h3>
+          <h3 className="text-base font-bold text-slate-200">{t.noVideosFound || "No videos found"}</h3>
           <p className="text-xs text-slate-400 max-w-sm">
             {videoFilterFavoritesOnly
-              ? 'Você ainda não favoritou nenhum vídeo. Clique na estrela de qualquer vídeo para adicioná-lo aqui.'
-              : 'Importe vídeos do seu computador ou adicione por URL direta para começar sua galeria.'}
+              ? (t.noFavVideosDesc || (isEn ? 'You have not favorited any videos yet. Click the star on any video to add it here.' : 'Você ainda não favoritou nenhum vídeo. Clique na estrela de qualquer vídeo para adicioná-lo aqui.'))
+              : (t.noVideosDesc || (isEn ? 'Import videos from your computer or add via direct URL to start your gallery.' : 'Importe vídeos do seu computador ou adicione por URL direta para começar sua galeria.'))}
           </p>
           <button
             onClick={() => fileInputRef.current?.click()}
             className="mt-2 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-glow-brand"
           >
             <Upload size={14} />
-            <span>Importar Primeiro Vídeo</span>
+            <span>{t.importFirstVideo || "Import First Video"}</span>
           </button>
         </div>
       ) : (
@@ -909,13 +926,13 @@ export const VideosView: React.FC = () => {
                           playsInline
                           {...({ 'webkit-playsinline': 'true', 'x5-playsinline': 'true' } as any)}
                           preload="auto"
-                          poster={video.thumbnailUrl ? `${video.thumbnailUrl}${video.thumbnailUrl.includes('?') ? '&' : '?'}v=${encodeURIComponent(video.createdAt || 'now')}` : undefined}
+                          poster={video.thumbnailUrl ? `${video.thumbnailUrl}${video.thumbnailUrl.includes('?') ? '&' : '?'}_k=${thumbRefreshKey}&v=${encodeURIComponent(video.createdAt || 'now')}` : undefined}
                           className="w-full h-full object-contain"
                           onError={(e) => {
                             console.warn('VideosView inline error:', e);
                           }}
                         >
-                          Seu navegador não suporta este vídeo.
+                          {t.browserNoVideo || (isEn ? 'Your browser does not support this video.' : 'Seu navegador não suporta este vídeo.')}
                         </video>
                       );
                     })()}
@@ -928,7 +945,7 @@ export const VideosView: React.FC = () => {
                         setActivePlayingVideo(video);
                       }}
                       className="absolute top-2 right-10 z-30 p-1.5 rounded-full bg-black/80 text-white hover:bg-white hover:text-black border border-white/30 transition-all shadow-lg"
-                      title="Expandir Vídeo (Player Grande)"
+                      title={t.expandVideo || "Expand Video"}
                     >
                       <Maximize2 size={14} />
                     </button>
@@ -936,7 +953,7 @@ export const VideosView: React.FC = () => {
                       type="button"
                       onClick={() => closeInlinePlay(video.id)}
                       className="absolute top-2 right-2 z-30 p-1.5 rounded-full bg-black/80 text-white hover:bg-white hover:text-black border border-white/30 transition-all shadow-lg"
-                      title="Fechar Reprodutor"
+                      title={t.closePlayer || "Close Player"}
                     >
                       <X size={14} />
                     </button>
@@ -955,10 +972,16 @@ export const VideosView: React.FC = () => {
                   >
                     {/* High-speed Cached Smart Thumbnail Image with Fallback */}
                     <img
-                      src={video.thumbnailUrl ? `${video.thumbnailUrl}${video.thumbnailUrl.includes('?') ? '&' : '?'}v=${encodeURIComponent(video.createdAt || 'now')}` : ''}
+                      key={`${video.id}-${thumbRefreshKey}`}
+                      src={video.thumbnailUrl ? `${video.thumbnailUrl}${video.thumbnailUrl.includes('?') ? '&' : '?'}_k=${thumbRefreshKey}&v=${encodeURIComponent(video.createdAt || 'now')}` : ''}
                       alt={video.title}
                       loading="lazy"
                       className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-500"
+                      onLoad={(e) => {
+                        e.currentTarget.style.display = 'block';
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                        if (fallback) fallback.style.display = 'none';
+                      }}
                       onError={(e) => {
                         e.currentTarget.style.display = 'none';
                         const fallback = e.currentTarget.nextElementSibling as HTMLElement;
@@ -994,7 +1017,7 @@ export const VideosView: React.FC = () => {
                         ? 'bg-black/70 text-white/60 border border-white/40 hover:border-white'
                         : 'opacity-0 group-hover:opacity-100 bg-black/60 text-white/50 border border-white/20 hover:border-white'
                     }`}
-                    title={isSelected ? 'Desmarcar vídeo' : 'Selecionar vídeo'}
+                    title={isSelected ? (t.deselectVideo || "Deselect video") : (t.selectVideo || "Select video")}
                   >
                     {isSelected ? <Check size={16} strokeWidth={3} /> : <Square size={13} />}
                   </button>
@@ -1009,7 +1032,7 @@ export const VideosView: React.FC = () => {
                     className={`absolute top-2.5 px-2 py-0.5 rounded-lg bg-black/70 hover:bg-violet-950/90 hover:border-violet-500/60 cursor-pointer backdrop-blur-md border border-white/10 font-mono text-[9px] font-bold text-accent-purple hover:text-white flex items-center gap-1 transition-all z-20 shadow-sm ${
                       isSelected || isSelectionMode || selectedVideoIds.length > 0 ? 'left-11' : 'left-2.5 group-hover:left-11'
                     }`}
-                    title={`Filtrar Galeria por pasta "${video.folder}"`}
+                    title={isEn ? `Filter Gallery by folder "${video.folder}"` : `Filtrar Galeria por pasta "${video.folder}"`}
                   >
                     <Folder size={10} />
                     <span>{video.folder}</span>
@@ -1019,7 +1042,7 @@ export const VideosView: React.FC = () => {
                   {isDuplicateVideo && (
                     <span
                       className="absolute top-2.5 right-11 px-2 py-0.5 rounded-lg bg-amber-500/90 text-slate-950 font-bold text-[9px] shadow-sm flex items-center gap-1 backdrop-blur-md"
-                      title="Vídeo com mesma resolução detectado como duplicado na galeria"
+                      title={isEn ? "Video with same resolution detected as duplicate in gallery" : "Vídeo com mesma resolução detectado como duplicado na galeria"}
                     >
                       <Copy size={10} />
                       <span>Duplicado</span>
@@ -1038,7 +1061,7 @@ export const VideosView: React.FC = () => {
                         ? 'bg-amber-500/30 text-amber-400 border-amber-400/50 shadow-glow-amber'
                         : 'bg-black/60 hover:bg-black/80 text-slate-400 hover:text-white border-white/10'
                     }`}
-                    title={video.isFavorite ? 'Remover dos favoritos' : 'Favoritar vídeo'}
+                    title={video.isFavorite ? (t.removeFavorite || (isEn ? 'Remove from favorites' : 'Remover dos favoritos')) : (t.addFavorite || (isEn ? 'Favorite video' : 'Favoritar vídeo'))}
                   >
                     <Star size={13} className={video.isFavorite ? 'fill-amber-400' : ''} />
                   </button>
@@ -1122,7 +1145,7 @@ export const VideosView: React.FC = () => {
                         setActivePlayingVideo(video);
                       }}
                       className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-brand-300 transition-colors"
-                      title="Expandir Vídeo (Player Grande)"
+                      title={t.expandVideo || "Expand Video"}
                     >
                       <Maximize2 size={15} />
                     </button>
@@ -1134,7 +1157,7 @@ export const VideosView: React.FC = () => {
                       rel="noreferrer"
                       onClick={(e) => e.stopPropagation()}
                       className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-cyan-300 transition-colors"
-                      title="Abrir Vídeo em Nova Aba (Player Nativo)"
+                      title={t.openNewTab || (isEn ? "Open Video in New Tab (Native Player)" : "Abrir Vídeo em Nova Aba (Player Nativo)")}
                     >
                       <ExternalLink size={15} />
                     </a>
@@ -1146,7 +1169,7 @@ export const VideosView: React.FC = () => {
                         setActiveMenuVideoId(activeMenuVideoId === video.id ? null : video.id);
                       }}
                       className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-slate-200 transition-colors"
-                      title="Opções do vídeo"
+                      title={t.folderActions || (isEn ? "Video options" : "Opções do vídeo")}
                     >
                       <MoreVertical size={15} />
                     </button>
@@ -1188,7 +1211,7 @@ export const VideosView: React.FC = () => {
                       className="w-full px-3 py-1.5 rounded-xl hover:bg-white/10 text-left text-xs text-slate-200 flex items-center gap-2"
                     >
                       <ExternalLink size={13} className="text-cyan-400" />
-                      <span>Abrir em Nova Aba</span>
+                      <span>{isEn ? "Open in New Tab" : "Abrir em Nova Aba"}</span>
                     </a>
 
                     {(() => {
@@ -1201,10 +1224,10 @@ export const VideosView: React.FC = () => {
                             navigateToView('album-detail', matchedAlbum.id);
                           }}
                           className="w-full px-3 py-1.5 rounded-xl hover:bg-white/10 text-left text-xs text-slate-200 flex items-center gap-2"
-                          title={`Ir para o Álbum correspondente: ${matchedAlbum.title}`}
+                          title={isEn ? `Go to matching Album: ${matchedAlbum.title}` : `Ir para o Álbum correspondente: ${matchedAlbum.title}`}
                         >
                           <FolderHeart size={13} className="text-pink-400" />
-                          <span>Ir para Álbum de Origem</span>
+                          <span>{isEn ? "Go to Source Album" : "Ir para Álbum de Origem"}</span>
                         </button>
                       );
                     })()}
@@ -1217,7 +1240,7 @@ export const VideosView: React.FC = () => {
                       className="w-full px-3 py-1.5 rounded-xl hover:bg-white/10 text-left text-xs text-slate-200 flex items-center gap-2"
                     >
                       <FolderInput size={13} className="text-cyan-400" />
-                      <span>Mover para Pasta...</span>
+                      <span>{isEn ? "Move to Folder..." : "Mover para Pasta..."}</span>
                     </button>
 
                     <button
@@ -1247,15 +1270,37 @@ export const VideosView: React.FC = () => {
                         ? `/api/proxy-video-stream?url=${encodeURIComponent(rawDl)}&referer=${encodeURIComponent(video.sourceUrl || defaultDlRef)}&download=true&filename=${encodeURIComponent(video.filename)}`
                         : video.downloadUrl;
                       return (
-                        <a
-                          href={effectiveDl}
-                          download={video.filename}
-                          onClick={() => setActiveMenuVideoId(null)}
-                          className="w-full px-3 py-1.5 rounded-xl hover:bg-white/10 text-left text-xs text-slate-200 flex items-center gap-2"
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setActiveMenuVideoId(null);
+                            try {
+                              addNotification({
+                                type: 'info',
+                                title: 'Iniciando Download',
+                                message: isEn ? `Saving "${video.title || video.filename}" directly to Downloads folder...` : `Salvando "${video.title || video.filename}" diretamente na pasta Downloads...`,
+                              });
+                              const res = await backendApi.downloadToDisk(effectiveDl || video.streamUrl || '', video.filename, true);
+                              if (res && res.success) {
+                                addNotification({
+                                  type: 'success',
+                                  title: isEn ? 'Download Completed' : 'Download Concluído',
+                                  message: isEn ? `File saved to Downloads: "${res.filename || video.filename}".` : `Arquivo salvo em Downloads: "${res.filename || video.filename}".`,
+                                });
+                              }
+                            } catch (e) {
+                              addNotification({
+                                type: 'error',
+                                title: isEn ? 'Download Failed' : 'Falha no Download',
+                                message: isEn ? 'Could not save video to disk.' : 'Não foi possível salvar o vídeo no disco.',
+                              });
+                            }
+                          }}
+                          className="w-full px-3 py-1.5 rounded-xl hover:bg-white/10 text-left text-xs text-slate-200 flex items-center gap-2 cursor-pointer"
                         >
                           <Download size={13} className="text-brand-400" />
-                          <span>Baixar Arquivo</span>
-                        </a>
+                          <span>{isEn ? 'Download File' : 'Baixar Arquivo'}</span>
+                        </button>
                       );
                     })()}
 
@@ -1266,7 +1311,7 @@ export const VideosView: React.FC = () => {
                       className="w-full px-3 py-1.5 rounded-xl hover:bg-rose-900/30 text-left text-xs text-rose-300 flex items-center gap-2"
                     >
                       <Trash2 size={13} className="text-rose-400" />
-                      <span>Excluir do Disco</span>
+                      <span>{isEn ? 'Delete from Disk' : 'Excluir do Disco'}</span>
                     </button>
                   </div>
                 )}
@@ -1279,600 +1324,620 @@ export const VideosView: React.FC = () => {
 
       {/* Add Video by Direct URL Modal */}
       {isUrlModalOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isDownloadingUrl) setIsUrlModalOpen(false);
-          }}
-        >
-          <div className="bg-slate-900 border border-border rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl relative">
-            <h3 className="font-bold text-base text-slate-100 mb-1 flex items-center gap-2">
-              <Link2 size={18} className="text-cyan-400" />
-              <span>Importar Vídeo por Link URL</span>
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">
-              O vídeo será baixado diretamente para a pasta selecionada no seu disco.
-            </p>
+        <ModalPortal>
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !isDownloadingUrl) setIsUrlModalOpen(false);
+            }}
+          >
+            <div className="bg-slate-900 border border-border rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl relative">
+              <h3 className="font-bold text-base text-slate-100 mb-1 flex items-center gap-2">
+                <Link2 size={18} className="text-cyan-400" />
+                <span>{isEn ? "Import Video via URL Link" : "Importar Vídeo por Link URL"}</span>
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">
+                {isEn ? "The video will be downloaded directly to the selected folder on your disk." : "O vídeo será baixado diretamente para a pasta selecionada no seu disco."}
+              </p>
 
-            <form onSubmit={handleAddUrl} className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1">
-                  URL Direta do Vídeo (MP4, WebM):
-                </label>
-                <input
-                  type="url"
-                  required
-                  placeholder="https://exemplo.com/video.mp4"
-                  value={urlInput}
-                  onChange={e => setUrlInput(e.target.value)}
-                  className="w-full bg-surface px-3.5 py-2.5 rounded-xl border border-border focus:border-brand-500 outline-none text-xs text-slate-100"
-                />
-              </div>
+              <form onSubmit={handleAddUrl} className="space-y-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">
+                    {isEn ? "Direct Video URL (MP4, WebM):" : "URL Direta do Vídeo (MP4, WebM):"}
+                  </label>
+                  <input
+                    type="url"
+                    required
+                    placeholder="https://exemplo.com/video.mp4"
+                    value={urlInput}
+                    onChange={e => setUrlInput(e.target.value)}
+                    className="w-full bg-surface px-3.5 py-2.5 rounded-xl border border-border focus:border-brand-500 outline-none text-xs text-slate-100"
+                  />
+                </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1">
-                  Título (Opcional):
-                </label>
-                <input
-                  type="text"
-                  placeholder="Meu Clipe Especial"
-                  value={urlTitleInput}
-                  onChange={e => setUrlTitleInput(e.target.value)}
-                  className="w-full bg-surface px-3.5 py-2.5 rounded-xl border border-border focus:border-brand-500 outline-none text-xs text-slate-100"
-                />
-              </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">
+                    {isEn ? "Title (Optional):" : "Título (Opcional):"}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Meu Clipe Especial"
+                    value={urlTitleInput}
+                    onChange={e => setUrlTitleInput(e.target.value)}
+                    className="w-full bg-surface px-3.5 py-2.5 rounded-xl border border-border focus:border-brand-500 outline-none text-xs text-slate-100"
+                  />
+                </div>
 
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1">
-                  Pasta de Destino:
-                </label>
-                <select
-                  value={urlFolderInput}
-                  onChange={e => setUrlFolderInput(e.target.value)}
-                  className="w-full bg-surface px-3.5 py-2.5 rounded-xl border border-border focus:border-brand-500 outline-none text-xs text-slate-100"
-                >
-                  {videoFolders.map(f => (
-                    <option key={f.id} value={f.name}>
-                      {f.name} ({f.videoCount})
-                    </option>
-                  ))}
-                </select>
-              </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">
+                    {isEn ? 'Destination Folder:' : 'Pasta de Destino:'}
+                  </label>
+                  <select
+                    value={urlFolderInput}
+                    onChange={e => setUrlFolderInput(e.target.value)}
+                    className="w-full bg-surface px-3.5 py-2.5 rounded-xl border border-border focus:border-brand-500 outline-none text-xs text-slate-100"
+                  >
+                    {videoFolders.map(f => (
+                      <option key={f.id} value={f.name}>
+                        {f.name} ({f.videoCount})
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              {/* Opção de Modo de Armazenamento */}
-              <div className="p-3 rounded-2xl bg-surface-elevated/40 border border-border space-y-2">
-                <label className="text-xs font-bold text-slate-200 block">
-                  Destino do Armazenamento:
-                </label>
-                <div className="grid grid-cols-2 gap-2">
+                {/* Opção de Modo de Armazenamento */}
+                <div className="p-3 rounded-2xl bg-surface-elevated/40 border border-border space-y-2">
+                  <label className="text-xs font-bold text-slate-200 block">
+                    Destino do Armazenamento:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setUrlStreamOnlyInput(false)}
+                      className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
+                        !urlStreamOnlyInput
+                          ? 'bg-purple-600/20 border-purple-500/60 text-purple-300 font-bold'
+                          : 'bg-surface border-border text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5"><Globe size={13} /><span>Baixar p/ Nuvem</span></div>
+                      <div className="text-[10px] font-normal text-slate-400 mt-0.5">Salva no Hugging Face (10GB)</div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setUrlStreamOnlyInput(true)}
+                      className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
+                        urlStreamOnlyInput
+                          ? 'bg-cyan-600/20 border-cyan-500/60 text-cyan-300 font-bold'
+                          : 'bg-surface border-border text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5"><Link2 size={13} /><span>Stream Puro (URL)</span></div>
+                      <div className="text-[10px] font-normal text-slate-400 mt-0.5">Sem download (Zero disco)</div>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setUrlStreamOnlyInput(false)}
-                    className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
-                      !urlStreamOnlyInput
-                        ? 'bg-purple-600/20 border-purple-500/60 text-purple-300 font-bold'
-                        : 'bg-surface border-border text-slate-400'
-                    }`}
+                    disabled={isDownloadingUrl}
+                    onClick={() => setIsUrlModalOpen(false)}
+                    className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover text-slate-300 text-xs font-semibold"
                   >
-                    <div className="flex items-center gap-1.5"><Globe size={13} /><span>Baixar p/ Nuvem</span></div>
-                    <div className="text-[10px] font-normal text-slate-400 mt-0.5">Salva no Hugging Face (10GB)</div>
+                    Cancelar
                   </button>
-
                   <button
-                    type="button"
-                    onClick={() => setUrlStreamOnlyInput(true)}
-                    className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
-                      urlStreamOnlyInput
-                        ? 'bg-cyan-600/20 border-cyan-500/60 text-cyan-300 font-bold'
-                        : 'bg-surface border-border text-slate-400'
-                    }`}
+                    type="submit"
+                    disabled={isDownloadingUrl || !urlInput.trim()}
+                    className="px-5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-glow-brand"
                   >
-                    <div className="flex items-center gap-1.5"><Link2 size={13} /><span>Stream Puro (URL)</span></div>
-                    <div className="text-[10px] font-normal text-slate-400 mt-0.5">Sem download (Zero disco)</div>
+                    {isDownloadingUrl ? (isEn ? 'Downloading...' : 'Baixando...') : (isEn ? 'Download & Save' : 'Baixar e Salvar')}
                   </button>
                 </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  disabled={isDownloadingUrl}
-                  onClick={() => setIsUrlModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover text-slate-300 text-xs font-semibold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isDownloadingUrl || !urlInput.trim()}
-                  className="px-5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-glow-brand"
-                >
-                  {isDownloadingUrl ? 'Baixando...' : 'Baixar e Salvar'}
-                </button>
-              </div>
-            </form>
+              </form>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Single Video Delete Confirmation Modal */}
       {videoToDelete && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setVideoToDelete(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setVideoToDelete(null)}
           >
-            <div className="mx-auto flex justify-center">
-              <IconBadge variant="rose" size="lg">
-                <Trash2 size={24} />
-              </IconBadge>
-            </div>
-            <div>
-              <h4 className="font-bold text-base text-white">{t.confirmDeleteTitle}</h4>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                {t.confirmDeleteDesc.replace('{title}', videoToDelete.title)}
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setVideoToDelete(null)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                {t.cancel}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await deleteVideo(videoToDelete.id);
-                  setVideoToDelete(null);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                {t.delete}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Batch Delete Confirmation Modal */}
-      {isConfirmingBatchDelete && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setIsConfirmingBatchDelete(false)}
-        >
-          <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="mx-auto flex justify-center">
-              <IconBadge variant="rose" size="lg">
-                <Trash2 size={24} />
-              </IconBadge>
-            </div>
-            <div>
-              <h4 className="font-bold text-base text-white">{t.confirmBatchDeleteTitle.replace('{count}', String(selectedVideoIds.length))}</h4>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                {t.confirmBatchDeleteDesc.replace('{count}', String(selectedVideoIds.length))}
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsConfirmingBatchDelete(false)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                {t.cancel}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await batchDeleteVideos(selectedVideoIds);
-                  setIsConfirmingBatchDelete(false);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                {t.batchDelete}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Video Rename Modal */}
-      {videoToRename && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setVideoToRename(null)}
-        >
-          <div
-            className="bg-slate-900 border border-border rounded-3xl p-5 sm:p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                <Edit2 size={18} />
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mx-auto flex justify-center">
+                <IconBadge variant="rose" size="lg">
+                  <Trash2 size={24} />
+                </IconBadge>
               </div>
               <div>
-                <h4 className="font-bold text-sm text-white">{t.rename}</h4>
-                <p className="text-xs text-slate-400">
-                  {t.renameDesc || 'Altere o título de exibição do arquivo'}
+                <h4 className="font-bold text-base text-white">{t.confirmDeleteTitle}</h4>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  {t.confirmDeleteDesc.replace('{title}', videoToDelete.title)}
                 </p>
               </div>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                if (videoToRename.newTitle.trim()) {
-                  await renameVideo(videoToRename.video.id, videoToRename.newTitle.trim());
-                  setVideoToRename(null);
-                }
-              }}
-              className="space-y-4"
-            >
-              <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-                  {t.newTitle || 'Novo Título:'}
-                </label>
-                <input
-                  type="text"
-                  autoFocus
-                  value={videoToRename.newTitle}
-                  onChange={e => setVideoToRename({ ...videoToRename, newTitle: e.target.value })}
-                  placeholder={t.videoTitlePlaceholder || 'Nome do vídeo...'}
-                  className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 font-medium"
-                />
-              </div>
-
-              <div className="flex items-center gap-2.5 pt-1">
+              <div className="flex items-center gap-2.5 pt-2">
                 <button
                   type="button"
-                  onClick={() => setVideoToRename(null)}
+                  onClick={() => setVideoToDelete(null)}
                   className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
                 >
                   {t.cancel}
                 </button>
                 <button
-                  type="submit"
-                  disabled={!videoToRename.newTitle.trim()}
-                  className="flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold shadow-glow-brand transition-all"
+                  type="button"
+                  onClick={async () => {
+                    await deleteVideo(videoToDelete.id);
+                    setVideoToDelete(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
                 >
-                  {t.confirm}
+                  {t.delete}
                 </button>
               </div>
-            </form>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
+      )}
+
+      {/* Batch Delete Confirmation Modal */}
+      {isConfirmingBatchDelete && (
+        <ModalPortal>
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setIsConfirmingBatchDelete(false)}
+          >
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mx-auto flex justify-center">
+                <IconBadge variant="rose" size="lg">
+                  <Trash2 size={24} />
+                </IconBadge>
+              </div>
+              <div>
+                <h4 className="font-bold text-base text-white">{t.confirmBatchDeleteTitle.replace('{count}', String(selectedVideoIds.length))}</h4>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  {t.confirmBatchDeleteDesc.replace('{count}', String(selectedVideoIds.length))}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmingBatchDelete(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await batchDeleteVideos(selectedVideoIds);
+                    setIsConfirmingBatchDelete(false);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {t.batchDelete}
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+
+      {/* Video Rename Modal */}
+      {videoToRename && (
+        <ModalPortal>
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setVideoToRename(null)}
+          >
+            <div
+              className="bg-slate-900 border border-border rounded-3xl p-5 sm:p-6 max-w-md w-full space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <Edit2 size={18} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-white">{t.rename}</h4>
+                  <p className="text-xs text-slate-400">
+                    {t.renameDesc || (isEn ? "Change display title of file" : "Altere o título de exibição do arquivo")}
+                  </p>
+                </div>
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (videoToRename.newTitle.trim()) {
+                    await renameVideo(videoToRename.video.id, videoToRename.newTitle.trim());
+                    setVideoToRename(null);
+                  }
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                    {t.newTitle || (isEn ? "New Title:" : "Novo Título:")}
+                  </label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={videoToRename.newTitle}
+                    onChange={e => setVideoToRename({ ...videoToRename, newTitle: e.target.value })}
+                    placeholder={t.videoTitlePlaceholder || (isEn ? "Video name..." : "Nome do vídeo...")}
+                    className="w-full bg-surface border border-border rounded-2xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 font-medium"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setVideoToRename(null)}
+                    className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                  >
+                    {t.cancel}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!videoToRename.newTitle.trim()}
+                    className="flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white text-xs font-bold shadow-glow-brand transition-all"
+                  >
+                    {t.confirm}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </ModalPortal>
       )}
 
       {/* Folder Action Sheet / Menu (100% imune a overflow em iPhone e PC) */}
       {activeFolderMenuName && (
-        <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setActiveFolderMenuName(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-brand-500/40 rounded-3xl p-5 max-w-xs w-full space-y-3 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setActiveFolderMenuName(null)}
           >
-            <div className="flex items-center gap-2.5 pb-1 border-b border-white/10">
-              <div className="p-2 rounded-xl bg-brand-500/20 text-brand-400">
-                <Folder size={18} />
+            <div
+              className="bg-slate-900 border border-brand-500/40 rounded-3xl p-5 max-w-xs w-full space-y-3 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2.5 pb-1 border-b border-white/10">
+                <div className="p-2 rounded-xl bg-brand-500/20 text-brand-400">
+                  <Folder size={18} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h4 className="font-bold text-sm text-white truncate">{activeFolderMenuName}</h4>
+                  <p className="text-[10px] text-slate-400">
+                    {t.folderOptions || (isEn ? "Folder Options" : "Opções da Pasta")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveFolderMenuName(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white"
+                >
+                  <X size={16} />
+                </button>
               </div>
-              <div className="min-w-0 flex-1">
-                <h4 className="font-bold text-sm text-white truncate">{activeFolderMenuName}</h4>
-                <p className="text-[10px] text-slate-400">
-                  {t.folderOptions || 'Opções da Pasta'}
-                </p>
+
+              <div className="space-y-1 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeFolderMenuName;
+                    setActiveFolderMenuName(null);
+                    setActiveFolderModal({ type: 'rename', folderName: target });
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl hover:bg-white/10 text-left text-xs font-semibold text-slate-200 flex items-center gap-2.5 transition-colors"
+                >
+                  <Edit2 size={16} className="text-amber-400" />
+                  <span>{t.renameFolder}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeFolderMenuName;
+                    setActiveFolderMenuName(null);
+                    handleDeleteFolderConfirm(target);
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl hover:bg-rose-900/30 text-left text-xs font-semibold text-rose-300 flex items-center gap-2.5 transition-colors"
+                >
+                  <Trash2 size={16} className="text-rose-400" />
+                  <span>{t.deleteFolder}</span>
+                </button>
               </div>
+
               <button
                 type="button"
                 onClick={() => setActiveFolderMenuName(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
+                className="w-full py-2 rounded-xl bg-surface hover:bg-surface-elevated text-slate-400 hover:text-white text-xs font-semibold transition-colors mt-2"
               >
-                <X size={16} />
+                Fechar
               </button>
             </div>
-
-            <div className="space-y-1 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  const target = activeFolderMenuName;
-                  setActiveFolderMenuName(null);
-                  setActiveFolderModal({ type: 'rename', folderName: target });
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl hover:bg-white/10 text-left text-xs font-semibold text-slate-200 flex items-center gap-2.5 transition-colors"
-              >
-                <Edit2 size={16} className="text-amber-400" />
-                <span>{t.renameFolder}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const target = activeFolderMenuName;
-                  setActiveFolderMenuName(null);
-                  handleDeleteFolderConfirm(target);
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl hover:bg-rose-900/30 text-left text-xs font-semibold text-rose-300 flex items-center gap-2.5 transition-colors"
-              >
-                <Trash2 size={16} className="text-rose-400" />
-                <span>{t.deleteFolder}</span>
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setActiveFolderMenuName(null)}
-              className="w-full py-2 rounded-xl bg-surface hover:bg-surface-elevated text-slate-400 hover:text-white text-xs font-semibold transition-colors mt-2"
-            >
-              Fechar
-            </button>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Folder Delete Confirmation Modal */}
       {folderToDelete && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setFolderToDelete(null)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setFolderToDelete(null)}
           >
-            <div className="mx-auto flex justify-center">
-              <IconBadge variant="rose" size="lg">
-                <Trash2 size={24} />
-              </IconBadge>
-            </div>
-            <div>
-              <h4 className="font-bold text-base text-white">{t.confirmDeleteFolderTitle}</h4>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                {t.confirmDeleteFolderDesc.replace('{folder}', folderToDelete)}
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setFolderToDelete(null)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                {t.cancel}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await deleteVideoFolder(folderToDelete);
-                  setFolderToDelete(null);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                {t.deleteFolder}
-              </button>
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mx-auto flex justify-center">
+                <IconBadge variant="rose" size="lg">
+                  <Trash2 size={24} />
+                </IconBadge>
+              </div>
+              <div>
+                <h4 className="font-bold text-base text-white">{t.confirmDeleteFolderTitle}</h4>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  {t.confirmDeleteFolderDesc.replace('{folder}', folderToDelete)}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setFolderToDelete(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await deleteVideoFolder(folderToDelete);
+                    setFolderToDelete(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {t.deleteFolder}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Batch Folder Delete Confirmation Modal */}
       {isConfirmingBatchFolderDelete && selectedFolderNames.length > 0 && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
-          onClick={() => setIsConfirmingBatchFolderDelete(false)}
-        >
+        <ModalPortal>
           <div
-            className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none"
+            onClick={() => setIsConfirmingBatchFolderDelete(false)}
           >
-            <div className="mx-auto flex justify-center">
-              <IconBadge variant="rose" size="lg">
-                <Trash2 size={24} />
-              </IconBadge>
-            </div>
-            <div>
-              <h4 className="font-bold text-base text-white">
-                {t.deleteSelectedFolders.replace('{count}', String(selectedFolderNames.length))}?
-              </h4>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                {(t.confirmBatchDeleteFolders || 'Deseja excluir as seguintes pastas: {folders}? Todos os vídeos serão transferidos com segurança para Geral.').replace('{folders}', selectedFolderNames.join(', '))}
-              </p>
-            </div>
-            <div className="flex items-center gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsConfirmingBatchFolderDelete(false)}
-                className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
-              >
-                {t.cancel}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  for (const fName of selectedFolderNames) {
-                    await deleteVideoFolder(fName);
-                  }
-                  setSelectedFolderNames([]);
-                  setIsFolderSelectionMode(false);
-                  setIsConfirmingBatchFolderDelete(false);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
-              >
-                {t.deleteFolder}
-              </button>
+            <div
+              className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl animate-scale-up"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mx-auto flex justify-center">
+                <IconBadge variant="rose" size="lg">
+                  <Trash2 size={24} />
+                </IconBadge>
+              </div>
+              <div>
+                <h4 className="font-bold text-base text-white">
+                  {t.deleteSelectedFolders.replace('{count}', String(selectedFolderNames.length))}?
+                </h4>
+                <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                  {(t.confirmBatchDeleteFolders || 'Deseja excluir as seguintes pastas: {folders}? Todos os vídeos serão transferidos com segurança para Geral.').replace('{folders}', selectedFolderNames.join(', '))}
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmingBatchFolderDelete(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-surface hover:bg-surface-elevated text-slate-300 text-xs font-semibold border border-border transition-colors"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    for (const fName of selectedFolderNames) {
+                      await deleteVideoFolder(fName);
+                    }
+                    setSelectedFolderNames([]);
+                    setIsFolderSelectionMode(false);
+                    setIsConfirmingBatchFolderDelete(false);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 transition-colors"
+                >
+                  {t.deleteFolder}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Real-time Streaming Upload Progress Card */}
       {uploadProgress && uploadProgress.isUploading && (
-        <div className="fixed bottom-6 right-6 z-50 w-80 sm:w-96 p-4 rounded-3xl bg-slate-900/95 border border-brand-500/50 shadow-2xl backdrop-blur-xl animate-fade-in flex flex-col gap-2.5 select-none">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="p-2 rounded-xl bg-brand-500/20 text-brand-400">
-                <RefreshCw size={16} className="animate-spin" />
+        <ModalPortal>
+          <div className="fixed bottom-6 right-6 z-50 w-80 sm:w-96 p-4 rounded-3xl bg-slate-900/95 border border-brand-500/50 shadow-2xl backdrop-blur-xl animate-fade-in flex flex-col gap-2.5 select-none">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-2 rounded-xl bg-brand-500/20 text-brand-400">
+                  <RefreshCw size={16} className="animate-spin" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-xs font-bold text-white truncate" title={uploadProgress.filename}>
+                    {uploadProgress.filename}
+                  </h4>
+                  <p className="text-[10px] text-slate-400">
+                    {uploadProgress.totalFiles > 1 ? `Arquivo ${uploadProgress.currentFileIndex} de ${uploadProgress.totalFiles} • ` : ''}
+                    {formatFileSize(uploadProgress.loaded)} de {formatFileSize(uploadProgress.total)}
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <h4 className="text-xs font-bold text-white truncate" title={uploadProgress.filename}>
-                  {uploadProgress.filename}
-                </h4>
-                <p className="text-[10px] text-slate-400">
-                  {uploadProgress.totalFiles > 1 ? `Arquivo ${uploadProgress.currentFileIndex} de ${uploadProgress.totalFiles} • ` : ''}
-                  {formatFileSize(uploadProgress.loaded)} de {formatFileSize(uploadProgress.total)}
-                </p>
-              </div>
+              <span className="font-mono font-bold text-sm text-brand-400 shrink-0">
+                {uploadProgress.percent}%
+              </span>
             </div>
-            <span className="font-mono font-bold text-sm text-brand-400 shrink-0">
-              {uploadProgress.percent}%
-            </span>
-          </div>
 
-          {/* Progress Bar */}
-          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
-            <div
-              className="bg-gradient-to-r from-brand-500 via-indigo-500 to-cyan-400 h-2 rounded-full transition-all duration-150"
-              style={{ width: `${uploadProgress.percent}%` }}
-            />
-          </div>
+            {/* Progress Bar */}
+            <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-brand-500 via-indigo-500 to-cyan-400 h-2 rounded-full transition-all duration-150"
+                style={{ width: `${uploadProgress.percent}%` }}
+              />
+            </div>
 
-          {/* Speed & ETA */}
-          <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
-            <span className="flex items-center gap-1 text-emerald-400">
-              <Zap size={11} />
-              <span>{((uploadProgress.speed || 0) / (1024 * 1024)).toFixed(1)} MB/s</span>
-            </span>
-            <span>
-              {uploadProgress.speed > 0
-                ? `~${Math.max(1, Math.ceil((uploadProgress.total - uploadProgress.loaded) / uploadProgress.speed))}s restantes`
-                : 'Calculando...'}
-            </span>
+            {/* Speed & ETA */}
+            <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+              <span className="flex items-center gap-1 text-emerald-400">
+                <Zap size={11} />
+                <span>{((uploadProgress.speed || 0) / (1024 * 1024)).toFixed(1)} MB/s</span>
+              </span>
+              <span>
+                {uploadProgress.speed > 0
+                  ? `~${Math.max(1, Math.ceil((uploadProgress.total - uploadProgress.loaded) / uploadProgress.speed))}s restantes`
+                  : 'Calculando...'}
+              </span>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Import Local Path / Directory Modal */}
       {isLocalImportModalOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !isImportingLocal) setIsLocalImportModalOpen(false);
-          }}
-        >
-          <div className="bg-slate-900 border border-border rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl relative">
-            <h3 className="font-bold text-base text-slate-100 mb-1 flex items-center gap-2">
-              <Zap size={18} className="text-emerald-400" />
-              <span>Importação Instantânea do PC</span>
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Cole o caminho de um arquivo de vídeo (ex: <code className="bg-surface px-1 text-slate-300">C:\Users\...\video.mp4</code>) ou de uma pasta inteira. O arquivo será importado em milissegundos sem demora de rede.
-            </p>
+        <ModalPortal>
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in"
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !isImportingLocal) setIsLocalImportModalOpen(false);
+            }}
+          >
+            <div className="bg-slate-900 border border-border rounded-3xl w-full max-w-md p-5 sm:p-6 shadow-2xl relative">
+              <h3 className="font-bold text-base text-slate-100 mb-1 flex items-center gap-2">
+                <Zap size={18} className="text-emerald-400" />
+                <span>{t.importPc || (isEn ? 'Instant Import from PC' : 'Importação Instantânea do PC')}</span>
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">
+                Cole o caminho de um arquivo de vídeo (ex: <code className="bg-surface px-1 text-slate-300">C:\Users\...\video.mp4</code>) ou de uma pasta inteira. O arquivo será importado em milissegundos sem demora de rede.
+              </p>
 
-            <form onSubmit={handleImportLocalSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Caminho no Computador (Arquivo ou Pasta):
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: C:\Users\jardi\Videos\meuvideo.mp4 ou D:\Filmes"
-                  value={localPathInput}
-                  onChange={(e) => setLocalPathInput(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-border text-slate-100 text-xs focus:border-emerald-500 focus:outline-none"
-                  autoFocus
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+              <form onSubmit={handleImportLocalSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Pasta de Destino:
+                    {isEn ? 'Computer Path (File or Folder):' : 'Caminho no Computador (Arquivo ou Pasta):'}
                   </label>
-                  <select
-                    value={localImportFolder}
-                    onChange={(e) => setLocalImportFolder(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-surface border border-border text-slate-100 text-xs focus:border-emerald-500 focus:outline-none"
-                  >
-                    {videoFolders.map(f => (
-                      <option key={f.name} value={f.name}>{f.name}</option>
-                    ))}
-                  </select>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: C:\Users\jardi\Videos\meuvideo.mp4 ou D:\Filmes"
+                    value={localPathInput}
+                    onChange={(e) => setLocalPathInput(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-border text-slate-100 text-xs focus:border-emerald-500 focus:outline-none"
+                    autoFocus
+                  />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Modo de Operação:
-                  </label>
-                  <select
-                    value={localImportMode}
-                    onChange={(e) => setLocalImportMode(e.target.value as 'copy' | 'move')}
-                    className="w-full px-3 py-2 rounded-xl bg-surface border border-border text-slate-100 text-xs focus:border-emerald-500 focus:outline-none"
-                  >
-                    <option value="copy">Copiar (Mantém original)</option>
-                    <option value="move">Mover (Zero cópia / 0s)</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      {isEn ? 'Destination Folder:' : 'Pasta de Destino:'}
+                    </label>
+                    <select
+                      value={localImportFolder}
+                      onChange={(e) => setLocalImportFolder(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-surface border border-border text-slate-100 text-xs focus:border-emerald-500 focus:outline-none"
+                    >
+                      {videoFolders.map(f => (
+                        <option key={f.name} value={f.name}>{f.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      {isEn ? 'Operation Mode:' : 'Modo de Operação:'}
+                    </label>
+                    <select
+                      value={localImportMode}
+                      onChange={(e) => setLocalImportMode(e.target.value as 'copy' | 'move')}
+                      className="w-full px-3 py-2 rounded-xl bg-surface border border-border text-slate-100 text-xs focus:border-emerald-500 focus:outline-none"
+                    >
+                      <option value="copy">{isEn ? "Copy (Keep original)" : "Copiar (Mantém original)"}</option>
+                      <option value="move">{isEn ? "Move (Zero copy / 0s)" : "Mover (Zero cópia / 0s)"}</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
 
-              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 flex items-start gap-2">
-                <HardDrive size={14} className="shrink-0 mt-0.5" />
-                <span>
-                  <strong>Super Rápido:</strong> Ao importar direto do disco, o sistema não precisa transferir os dados pelo navegador, economizando 100% do tempo de envio.
-                </span>
-              </div>
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 flex items-start gap-2">
+                  <HardDrive size={14} className="shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Super Rápido:</strong> Ao importar direto do disco, o sistema não precisa transferir os dados pelo navegador, economizando 100% do tempo de envio.
+                  </span>
+                </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  disabled={isImportingLocal}
-                  onClick={() => setIsLocalImportModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover text-slate-300 text-xs font-semibold transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isImportingLocal || !localPathInput.trim()}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-glow-emerald flex items-center gap-1.5"
-                >
-                  {isImportingLocal ? (
-                    <>
-                      <RefreshCw size={14} className="animate-spin" />
-                      <span>Processando...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Zap size={14} />
-                      <span>Importar Imediatamente</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={isImportingLocal}
+                    onClick={() => setIsLocalImportModalOpen(false)}
+                    className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover text-slate-300 text-xs font-semibold transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isImportingLocal || !localPathInput.trim()}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-glow-emerald flex items-center gap-1.5"
+                  >
+                    {isImportingLocal ? (
+                      <>
+                        <RefreshCw size={14} className="animate-spin" />
+                        <span>Processando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Zap size={14} />
+                        <span>Importar Imediatamente</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Drag & Drop Visual Overlay */}
       {isDragging && (
-        <div className="fixed inset-0 z-50 bg-brand-950/80 backdrop-blur-md border-4 border-dashed border-brand-400 flex flex-col items-center justify-center p-6 animate-fade-in pointer-events-none">
-          <div className="p-6 rounded-3xl bg-slate-900 border border-brand-500/50 shadow-2xl flex flex-col items-center text-center max-w-sm">
-            <Upload size={48} className="text-brand-400 animate-bounce mb-3" />
-            <h3 className="text-lg font-bold text-white mb-1">Solte seus vídeos aqui</h3>
-            <p className="text-xs text-slate-400">
-              Os arquivos serão importados com streaming acelerado para a pasta{' '}
-              <strong className="text-brand-300">{activeVideoFolder || 'Geral'}</strong>
-            </p>
+        <ModalPortal>
+          <div className="fixed inset-0 z-50 bg-brand-950/80 backdrop-blur-md border-4 border-dashed border-brand-400 flex flex-col items-center justify-center p-6 animate-fade-in pointer-events-none">
+            <div className="p-6 rounded-3xl bg-slate-900 border border-brand-500/50 shadow-2xl flex flex-col items-center text-center max-w-sm">
+              <Upload size={48} className="text-brand-400 animate-bounce mb-3" />
+              <h3 className="text-lg font-bold text-white mb-1">{isEn ? "Drop your videos here" : "Solte seus vídeos aqui"}</h3>
+              <p className="text-xs text-slate-400">
+                Os arquivos serão importados com streaming acelerado para a pasta{' '}
+                <strong className="text-brand-300">{activeVideoFolder || 'Geral'}</strong>
+              </p>
+            </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );
